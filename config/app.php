@@ -78,7 +78,12 @@ return [
     |
     */
 
-    'locale' => env('APP_LOCALE', 'en'),
+    /*
+    | Default 'id': surat resmi (PdfRenderer) memakai
+    | translatedFormat('d F Y') sehingga nama bulan harus Indonesia
+    | ("Oktober", bukan "October"). Bisa dioverride via APP_LOCALE.
+    */
+    'locale' => env('APP_LOCALE', 'id'),
 
     'fallback_locale' => env('APP_FALLBACK_LOCALE', 'en'),
 
