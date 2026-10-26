@@ -241,6 +241,27 @@ class VerifyPublicTest extends TestCase
     }
 
     #[Test]
+    public function segmen_lampiran_non_uuid_ditolak_route_sebelum_query_db(): void
+    {
+        $document = $this->makeLetter();
+        $this->finalizer->finalizeFromContent($document, 77);
+
+        $response = $this->get("/verify/{$document->id}/attachments/1");
+
+        // Constraint whereUuid harus menolak non-UUID SEBELUM controller
+        // menjalankan whereKey() pada kolom uuid PK — di Postgres produksi
+        // query itu melempar 'invalid input syntax for type uuid' (500),
+        // melanggar mandat 404 netral. Proxy yang terdeteksi di SQLite:
+        // request TIDAK boleh sampai ke halaman netral controller (yang
+        // menandakan query non-uuid sudah dieksekusi) — harus 404 dari
+        // penolakan route.
+        $response->assertNotFound();
+        $this->assertStringNotContainsStringIgnoringCase('sqlstate', $response->getContent());
+        $this->assertStringNotContainsStringIgnoringCase('exception', $response->getContent());
+        $response->assertDontSee('Dokumen tidak ditemukan');
+    }
+
+    #[Test]
     public function setiap_hit_halaman_mencatat_verification_hit_dan_audit(): void
     {
         $document = $this->makeLetter();

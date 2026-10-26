@@ -33,4 +33,8 @@ Route::get('/verify/{uuid}/file', [VerifyController::class, 'file'])
 Route::get('/verify/{uuid}/attachments/{attachment}', [VerifyController::class, 'attachment'])
     ->name('verify.attachment')
     ->middleware('throttle:verify')
-    ->whereUuid('uuid', 'attachment');
+    // whereUuid menerima SATU argumen array|string — dua argumen string
+    // membuat argumen kedua DIABAIKAN diam-diam ({attachment} tak
+    // terkonstrain; non-uuid lolos ke whereKey kolom uuid → Postgres
+    // 'invalid input syntax' 500). Array form membatasi keduanya.
+    ->whereUuid(['uuid', 'attachment']);
