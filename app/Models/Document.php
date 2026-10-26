@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Database\Factories\DocumentFactory;
+use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -15,7 +16,24 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  *
  * Catatan referensi lintas database: `created_by` dan `company_id` merujuk
  * entitas di luar DB `sagansa_document` — tanpa relasi Eloquent.
+ *
+ * Mass-assignment DIBATAS ke kolom isi surat yang boleh diisi dari request
+ * (DocumentController). Kolom siklus hidup & integritas TIDAK fillable dan
+ * hanya diatur lewat jalur service: `status` (controller/Finalizer),
+ * `id`+`number`+`seq` (uuid/counter dari NumberingService), `revoked_at`/`revocation_reason`.
  */
+#[Fillable([
+    'letter_type_id',
+    'company_id',
+    'unit',
+    'year',
+    'subject',
+    'date',
+    'body_html',
+    'metadata',
+    'classification',
+    'created_by',
+])]
 class Document extends Model
 {
     /** @use HasFactory<DocumentFactory> */
