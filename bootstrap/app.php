@@ -91,4 +91,23 @@ return Application::configure(basePath: dirname(__DIR__))
                 default => null,
             };
         });
+
+        // 500 — fallback TERAKHIR untuk exception /api/* yang tidak
+        // terpetakan handler di atas (mis. QueryException/RuntimeException
+        // tak terduga) agar tidak pernah bocor HTML/stack ke klien. WAJIB
+        // didaftarkan paling akhir: callback render dicocokkan berurutan,
+        // exception spesifik (401/422/409/403/404) harus menang duluan.
+        // Pesan generik — detail internal tidak ikut; exception tetap
+        // dilaporkan ke log oleh pipeline normal (renderable tidak
+        // mematikan reporting). HttpException berstatus lain (400/405/429/
+        // 500) memakai status aslinya, bukan dipaksa 500.
+        $exceptions->render(function (Throwable $e, Request $request) use ($isApi, $error) {
+            if (! $isApi($request)) {
+                return null;
+            }
+
+            $status = $e instanceof HttpException ? $e->getStatusCode() : 500;
+
+            return $error($status, 'SERVER_ERROR', 'Terjadi kesalahan server internal.');
+        });
     })->create();

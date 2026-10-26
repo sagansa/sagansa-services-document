@@ -157,7 +157,9 @@ trait CreatesDocumentSchema
                 ->cascadeOnUpdate()
                 ->cascadeOnDelete();
             $table->uuid('company_id')->nullable()->index();
-            $table->string('number')->unique();
+            // Nullable sejak migrasi 2026_10_26_000003: pra-nomor = NULL
+            // (NULL bebas dari constraint unique → banyak draft sah).
+            $table->string('number')->nullable()->unique();
             $table->integer('seq');
             $table->string('unit', 16);
             $table->integer('year');

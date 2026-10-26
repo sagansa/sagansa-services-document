@@ -87,10 +87,10 @@ class DocumentApiTest extends TestCase
             ->assertJsonPath('data.letter_type.code', 'ST')
             ->assertJsonPath('data.letter_type.name', 'Surat Tugas');
 
-        // Draft tersimpan: nomor kosong (pra-reserve), jenis ter-resolve,
+        // Draft tersimpan: nomor null (pra-reserve), jenis ter-resolve,
         // year dari date, created_by user login.
         $document = Document::query()->where('subject', 'Surat Tugas Audit Internal')->firstOrFail();
-        $this->assertSame('', $document->number);
+        $this->assertNull($document->number);
         $this->assertSame($type->id, $document->letter_type_id);
         $this->assertSame(2026, $document->year);
         $this->assertSame($this->user->id, $document->created_by);
@@ -101,6 +101,47 @@ class DocumentApiTest extends TestCase
             ->where('event', AuditLogger::EVENT_CREATED)
             ->firstOrFail();
         $this->assertSame($this->user->id, $log->actor_user_id);
+    }
+
+    #[Test]
+    public function two_drafts_can_coexist_before_numbering(): void
+    {
+        // Defect review: dulu pra-nomor = '' pada kolom NOT NULL + UNIQUE,
+        // sehingga draft kedua gagal duplicate key → 500. Kini pra-nomor =
+        // NULL yang bebas dari constraint unique → banyak draft sah hidup
+        // bersama sampai reserve/finalize mengisi nomornya.
+        $this->signInAsSigner();
+        LetterType::factory()->create(['code' => 'ST']);
+
+        $first = $this->postJson('/api/v1/documents', [
+            'letter_type_code' => 'ST',
+            'unit' => 'DIR',
+            'subject' => 'Draft pertama',
+            'date' => '2026-10-26',
+        ])->assertCreated();
+
+        $second = $this->postJson('/api/v1/documents', [
+            'letter_type_code' => 'ST',
+            'unit' => 'DIR',
+            'subject' => 'Draft kedua',
+            'date' => '2026-10-26',
+        ])->assertCreated();
+
+        $this->assertNull($first->json('data.number'));
+        $this->assertNull($second->json('data.number'));
+        $this->assertSame(2, Document::query()->whereNull('number')->count());
+        $this->assertSame(0, NumberSequence::query()->where('letter_type_code', 'ST')->value('last_seq') ?? 0);
+
+        // Reserve pada draft pertama: dia mendapat 001/... , draft kedua
+        // tetap pra-nomor (null) — bukan ikut ter-reserve.
+        $reserved = $this->postJson('/api/v1/documents/'.$first->json('data.id').'/numbering/reserve')
+            ->assertOk()
+            ->assertJsonPath('data.seq', 1);
+
+        $this->assertMatchesRegularExpression('/^001\/ST\/DIR\/[IVX]+\/2026$/', $reserved->json('data.number'));
+        $this->assertSame($reserved->json('data.number'), Document::query()->findOrFail($first->json('data.id'))->number);
+        $this->assertNull(Document::query()->findOrFail($second->json('data.id'))->number);
+        $this->assertSame(1, NumberSequence::query()->where('letter_type_code', 'ST')->value('last_seq'));
     }
 
     #[Test]

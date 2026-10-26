@@ -193,9 +193,9 @@ class Finalizer
                 }
 
                 // Nomor surat dicadangkan saat finalize bila surat lahir tanpa
-                // nomor. Kolom number NOT NULL di skema, jadi pra-nomor
-                // direpresentasikan string kosong (null tetap ditangani bila
-                // konstrain skema dilonggarkan nanti).
+                // nomor. Kolom number nullable sejak migrasi
+                // 2026_10_26_000003 (pra-nomor = NULL, banyak draft bisa
+                // hidup bersama); '' legasi tetap ditangani.
                 if ($locked->number === null || $locked->number === '') {
                     ['seq' => $seq, 'number' => $number] = $this->numbering->reserve(
                         $locked->letterType()->firstOrFail()->code,

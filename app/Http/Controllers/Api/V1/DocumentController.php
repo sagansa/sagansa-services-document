@@ -78,7 +78,9 @@ class DocumentController extends Controller
      * POST /documents — buat draft Mode A. Nomor surat TIDAK di-reserve di
      * sini (spec §7.1: reserve terjadi saat finalize, atau eksplisit lewat
      * endpoint numbering/reserve untuk surat yang disusun di luar); pra-
-     * nomor direpresentasikan string kosong.
+     * nomor direpresentasikan NULL (kolom nullable + unique — NULL tidak
+     * ikut constraint unique, jadi banyak draft pra-nomor bisa hidup
+     * bersama; dulu '' yang membuat hanya satu draft mungkin).
      *
      * duplicate_from_id: sumber WAJIB 'terbit' (validasi); isi + lampiran
      * disalin (berkas lampiran di-copy di disk documents dengan path uuid
@@ -110,9 +112,10 @@ class DocumentController extends Controller
             'created_by' => (int) $user->id,
         ]);
         $document->id = (string) Str::uuid(); // tidak fillable — uuid di-generate kode
-        // Pra-nomor: string kosong (kolom NOT NULL + unique — hanya satu
-        // draft tanpa nomor; reserve/finalize mengisinya).
-        $document->number = '';
+        // Pra-nomor: NULL (kolom nullable + unique — MySQL/SQLite mengizinkan
+        // banyak NULL di bawah indeks unique, jadi >1 draft pra-nomor sah;
+        // reserve/finalize mengisinya).
+        $document->number = null;
         $document->seq = 0;
         $document->status = 'draft';          // tidak fillable — hanya lewat jalur ini/Finalizer
 
