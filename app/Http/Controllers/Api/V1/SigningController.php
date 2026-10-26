@@ -87,10 +87,22 @@ class SigningController extends Controller
             }
 
             // Pembuat surat otomatis masuk blok TTD (PdfRenderer::signersFor)
-            // — tidak perlu/boleh diajukan sebagai penandatangan request.
-            if ((int) $signer->user_id === $actorId) {
+            // — signer-row MILIK PEMBUAT (documents.created_by) tidak boleh
+            // diajukan sebagai request, siapa pun aktor pengajuannya
+            // (endpoint ini tanpa gate kepemilikan surat). Ketat: pemilik
+            // signer-row == aktor juga ditolak — pengaju tidak menunjuk
+            // dirinya sendiri lewat endpoint ini.
+            $signerOwner = (int) $signer->user_id;
+
+            if ($signerOwner === (int) $locked->created_by) {
                 throw ValidationException::withMessages([
                     'signer_id' => 'Penandatangan tidak boleh sama dengan pembuat surat: pembuat sudah otomatis menandatangani lewat blok tanda tangan.',
+                ]);
+            }
+
+            if ($signerOwner === $actorId) {
+                throw ValidationException::withMessages([
+                    'signer_id' => 'Penandatangan tidak boleh sama dengan pengaju permintaan: pembuat surat menandatangani otomatis lewat blok tanda tangan, penandatangan lain diajukan terpisah.',
                 ]);
             }
 

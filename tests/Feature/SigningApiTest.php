@@ -137,6 +137,39 @@ class SigningApiTest extends TestCase
     }
 
     #[Test]
+    public function creator_owned_signer_row_is_rejected_even_when_submitted_by_another_user(): void
+    {
+        // Review fix: larangan "signer ≠ pembuat" membandingkan pemilik
+        // signer-row dengan documents.created_by — bukan dengan aktor.
+        // Endpoint tanpa gate kepemilikan: user B (signer aktif) pun bisa
+        // mengajukan signer-row milik pembuat A atas dokumen buatan A.
+        $document = $this->draftFor($this->creator);
+        $creatorSigner = Signer::factory()->role('komisaris')->create([
+            'user_id' => $this->creator->id,
+        ]);
+
+        $b = User::factory()->create();
+        $this->signInAsSigner($b);
+
+        $response = $this->postJson("/api/v1/documents/{$document->id}/signers", [
+            'signer_id' => $creatorSigner->id,
+        ]);
+
+        $response->assertStatus(422)
+            ->assertJsonPath('error.code', 'VALIDATION_ERROR');
+        $this->assertIsArray($response->json('error.details.signer_id'));
+        $this->assertSame(0, SigningRequest::query()->where('document_id', $document->id)->count());
+
+        // Kontras: signer-row milik user C (bukan pembuat) atas dokumen
+        // yang sama → 201 — jalur normal komisaris, pelaku bebas siapa.
+        $cSigner = Signer::factory()->role('komisaris')->create();
+        $this->postJson("/api/v1/documents/{$document->id}/signers", ['signer_id' => $cSigner->id])
+            ->assertCreated()
+            ->assertJsonPath('data.status', 'diminta');
+        $this->assertSame(1, SigningRequest::query()->where('document_id', $document->id)->count());
+    }
+
+    #[Test]
     public function unknown_or_inactive_signer_is_rejected_422(): void
     {
         [$document] = $this->documentWithSigner();
