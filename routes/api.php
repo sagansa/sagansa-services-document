@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\V1\AttachmentController;
 use App\Http\Controllers\Api\V1\DocumentController;
+use App\Http\Controllers\Api\V1\IssuanceController;
 use App\Http\Controllers\Api\V1\LetterTypeController;
 use App\Http\Controllers\Api\V1\PartyController;
 use App\Http\Controllers\Api\V1\SigningController;
@@ -49,4 +50,25 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'document.role'])->group(functi
     Route::get('/templates', [TemplateController::class, 'index']);
 
     Route::get('/me/signer', [DocumentController::class, 'meSigner']);
+
+    // Penerbitan inti (Task 16): pra-final, finalize a-d, reissue,
+    // revoke, void.
+    Route::post('/documents/{id}/pre-final', [IssuanceController::class, 'preFinal'])->whereUuid('id');
+    Route::post('/documents/{id}/finalize', [IssuanceController::class, 'finalize'])->whereUuid('id');
+    Route::post('/documents/{id}/reissue', [IssuanceController::class, 'reissue'])->whereUuid('id');
+    Route::post('/documents/{id}/revoke', [IssuanceController::class, 'revoke'])->whereUuid('id');
+    Route::post('/documents/{id}/void', [IssuanceController::class, 'void'])->whereUuid('id');
 });
+
+// Unduhan hasil pra-final (Task 16) — DI LUAR grup auth: URL signed-nya
+// sendiri yang menjadi otorisasi (link rahasia berumur 15 menit), jadi
+// bisa diunduh langsung dari browser tanpa token; tanda tangan hilang/
+// salah/kedaluwarsa ditolak 403 oleh middleware `signed`.
+Route::prefix('v1')
+    ->name('documents.')
+    ->middleware('signed')
+    ->group(function () {
+        Route::get('/documents/{id}/pre-final/download', [IssuanceController::class, 'downloadPreFinal'])
+            ->whereUuid('id')
+            ->name('pre-final.download');
+    });

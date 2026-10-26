@@ -1,6 +1,10 @@
 <?php
 
+use App\Exceptions\AlreadySignedException;
 use App\Exceptions\DocumentLockedException;
+use App\Exceptions\PdfInvalidException;
+use App\Exceptions\PdfUnsupportedException;
+use App\Exceptions\SigningIncompleteException;
 use App\Http\Middleware\DocumentRoleGate;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Foundation\Application;
@@ -74,6 +78,44 @@ return Application::configure(basePath: dirname(__DIR__))
             }
 
             return $error(409, 'DOCUMENT_LOCKED', $e->getMessage() !== '' ? $e->getMessage() : 'Surat terkunci untuk operasi ini.');
+        });
+
+        // 409 — dokumen sudah ditandatangan pihak luar; jalur unggah
+        // metode 'c' tidak boleh menyertakan koordinat overlay (Task 16).
+        $exceptions->render(function (AlreadySignedException $e, Request $request) use ($isApi, $error) {
+            if (! $isApi($request)) {
+                return null;
+            }
+
+            return $error(409, 'ALREADY_SIGNED', $e->getMessage() !== '' ? $e->getMessage() : 'Dokumen sudah ditandatangani.');
+        });
+
+        // 422 — masih ada signing_request 'diminta' menggantung; finalize/
+        // reissue ditolak sampai semua penandatangan memutuskan (Task 16).
+        $exceptions->render(function (SigningIncompleteException $e, Request $request) use ($isApi, $error) {
+            if (! $isApi($request)) {
+                return null;
+            }
+
+            return $error(422, 'SIGNING_INCOMPLETE', $e->getMessage() !== '' ? $e->getMessage() : 'Persetujuan tanda tangan belum lengkap.');
+        });
+
+        // 422 — berkas PDF yang dikirim bukan PDF valid (magic %PDF).
+        $exceptions->render(function (PdfInvalidException $e, Request $request) use ($isApi, $error) {
+            if (! $isApi($request)) {
+                return null;
+            }
+
+            return $error(422, 'PDF_INVALID', $e->getMessage() !== '' ? $e->getMessage() : 'Berkas PDF tidak valid.');
+        });
+
+        // 422 — PDF tidak dapat diproses (butuh qpdf, tidak tersedia).
+        $exceptions->render(function (PdfUnsupportedException $e, Request $request) use ($isApi, $error) {
+            if (! $isApi($request)) {
+                return null;
+            }
+
+            return $error(422, 'PDF_UNSUPPORTED', $e->getMessage() !== '' ? $e->getMessage() : 'Berkas PDF memakai fitur yang tidak didukung.');
         });
 
         // HttpException dipetakan per-status: 403 gate peran/otorisasi,
