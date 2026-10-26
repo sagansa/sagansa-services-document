@@ -30,6 +30,16 @@ return [
 
     'disks' => [
 
+        // Disk privat berkas penerbitan surat (issuance PDF). TANPA
+        // visibility public dan TANPA serve — berkas hanya boleh dibaca
+        // lewat layer service yang memeriksa hak akses, bukan URL publik.
+        'documents' => [
+            'driver' => 'local',
+            'root' => storage_path('app/documents'),
+            'throw' => false,
+            'report' => false,
+        ],
+
         'local' => [
             'driver' => 'local',
             'root' => storage_path('app/private'),
