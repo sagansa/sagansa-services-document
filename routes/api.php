@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\V1\AttachmentController;
 use App\Http\Controllers\Api\V1\DocumentController;
 use App\Http\Controllers\Api\V1\LetterTypeController;
 use App\Http\Controllers\Api\V1\PartyController;
+use App\Http\Controllers\Api\V1\SigningController;
 use App\Http\Controllers\Api\V1\TemplateController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -30,6 +31,13 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'document.role'])->group(functi
     Route::post('/documents/{id}/attachments', [AttachmentController::class, 'store'])->whereUuid('id');
     Route::delete('/documents/{id}/attachments/{attachmentId}', [AttachmentController::class, 'destroy'])
         ->whereUuid('id', 'attachmentId');
+
+    // Alur tanda tangan (Task 15): ajukan penandatangan per surat,
+    // putuskan (approve/reject) oleh signer pemilik, daftar tugas sendiri.
+    Route::post('/documents/{id}/signers', [SigningController::class, 'requestSign'])->whereUuid('id');
+    Route::get('/signing-requests/mine', [SigningController::class, 'mine']);
+    Route::post('/signing-requests/{id}/approve', [SigningController::class, 'approve'])->whereUuid('id');
+    Route::post('/signing-requests/{id}/reject', [SigningController::class, 'reject'])->whereUuid('id');
 
     // Buku pihak eksternal (Task 14).
     Route::get('/parties', [PartyController::class, 'index']);
