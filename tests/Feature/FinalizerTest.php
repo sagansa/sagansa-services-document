@@ -9,12 +9,14 @@ use App\Models\AuditLog;
 use App\Models\Document;
 use App\Models\DocumentAttachment;
 use App\Models\Issuance;
+use App\Models\LetterType;
 use App\Models\SigningRequest;
 use App\Services\AuditLogger;
 use App\Services\Finalizer;
 use Illuminate\Support\Facades\Storage;
 use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\Test;
+use RuntimeException;
 use Tests\Support\CreatesDocumentSchema;
 use Tests\TestCase;
 
@@ -151,6 +153,37 @@ class FinalizerTest extends TestCase
     }
 
     #[Test]
+    public function failure_after_file_write_cleans_up_orphan_file_and_rethrows(): void
+    {
+        $document = $this->makeLetter();
+
+        // Audit insert dipaksa gagal — terjadi SETELAH Storage::put sukses
+        // (urutan persist: insert issuance → put file → status → audit).
+        $audit = $this->createMock(AuditLogger::class);
+        $audit->method('log')->willThrowException(new RuntimeException('audit insert gagal'));
+        $finalizer = new Finalizer(audit: $audit);
+
+        try {
+            $finalizer->finalizeFromUpload($document, '%PDF-1.4 akan gagal di audit', 'd', 77);
+            $this->fail('Exception dari audit harus terlempar keluar.');
+        } catch (RuntimeException $e) {
+            $this->assertSame('audit insert gagal', $e->getMessage(), 'exception ASLI yang rethrow, bukan yang lain');
+        }
+
+        // Berkas yatim dibersihkan dari disk documents.
+        $this->assertSame(
+            [],
+            Storage::disk('documents')->allFiles(),
+            'tidak boleh ada berkas tersisa setelah transaksi gagal',
+        );
+
+        // Dan DB tetap konsisten (rollback): tanpa issuance, status draft.
+        $this->assertSame(0, Issuance::query()->where('document_id', $document->id)->count());
+        $this->assertSame('draft', $document->fresh()->status);
+        $this->assertSame(0, AuditLog::query()->where('document_id', $document->id)->count());
+    }
+
+    #[Test]
     public function reissue_replaces_active_issuance_and_records_note_in_audit(): void
     {
         $document = $this->makeLetter(['status' => 'terbit']);
@@ -239,12 +272,12 @@ class FinalizerTest extends TestCase
      * Dokumen surat standar: kode jenis 'ST', unit 'DIR', tahun berjalan,
      * body sederhana — nomor dari factory (sudah terisi) kecuali diubah.
      *
-     * @param array<string, mixed> $overrides
+     * @param  array<string, mixed>  $overrides
      */
     private function makeLetter(array $overrides = []): Document
     {
         return Document::factory()->create($overrides + [
-            'letter_type_id' => \App\Models\LetterType::factory()->create(['code' => 'ST']),
+            'letter_type_id' => LetterType::factory()->create(['code' => 'ST']),
             'unit' => 'DIR',
             'year' => now()->year,
             'subject' => 'Surat Kuasa Pengangkatan',

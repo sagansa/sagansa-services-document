@@ -38,10 +38,14 @@ use RuntimeException;
  * luar DB sehingga tidak bisa ikut rollback — trade-off-nya:
  *   - tulis gagal  → exception → transaksi rollback, DB konsisten
  *     (tidak ada baris issuance tanpa berkas);
- *   - commit gagal setelah tulis sukses → berkas yatim tertinggal di
- *     disk. Pilihan ini disengaja: berkas yatim hanya sampah yang bisa
- *     digarap GC, sedangkan baris DB tanpa berkas adalah surat terbit
- *     yang tidak bisa diunduh/dibuktikan.
+ *   - kegagalan apa pun SETELAH tulis sukses (status/audit/commit) →
+ *     transaksi rollback DAN berkas yatim dihapus best-effort di catch
+ *     (delete lalu rethrow exception asli). Cleanup-nya bebas race:
+ *     path memuat uuid issuance yang dibuat fresh dalam transaksi ini,
+ *     jadi berkas itu tak akan pernah tereferensi baris mana pun.
+ * Sisa risiko yang diterima: delete gagal (disk bermasalah) — berkas
+ * yatim hanya sampah yang bisa digarap GC, sedangkan baris DB tanpa
+ * berkas adalah surat terbit yang tidak bisa diunduh/dibuktikan.
  */
 class Finalizer
 {
@@ -99,7 +103,7 @@ class Finalizer
      * @param  int|null  $actorId  user pelaku; null = auth()->id()
      *
      * @throws InvalidArgumentException metode bukan 'c'|'d'
-     * @throws PdfInvalidException      bytes tidak diawali magic %PDF
+     * @throws PdfInvalidException bytes tidak diawali magic %PDF
      */
     public function finalizeFromUpload(Document $doc, string $pdfBytes, string $method, ?int $actorId = null): Issuance
     {
@@ -125,7 +129,7 @@ class Finalizer
      * @param  int|null  $actorId  user pelaku; null = auth()->id()
      *
      * @throws InvalidArgumentException metode tidak dikenal / note kosong
-     * @throws DocumentLockedException  status surat bukan 'terbit'
+     * @throws DocumentLockedException status surat bukan 'terbit'
      */
     public function reissue(Document $doc, string $method, callable $bytesProducer, string $note, ?int $actorId = null): Issuance
     {
@@ -148,117 +152,140 @@ class Finalizer
      * Satu-satunya jalur penulisan issuance — dipanggil dalam transaksi
      * dengan lock baris surat. Urutan: guard → reserve nomor → insert
      * issuance baru → nonaktifkan issuance aktif lama → tulis berkas →
-     * status terbit → audit.
+     * status terbit → audit. Bila transaksi gagal SETELAH berkas
+     * tertulis, berkas dibersihkan lalu exception asli dilempar ulang.
      *
      * @param  bool  $reissue  true = jalur penerbitan ulang (status wajib 'terbit')
      * @param  int|null  $actorId  user pelaku; null = auth()->id()
      *
-     * @throws DocumentLockedException   status tidak sesuai jalur
+     * @throws DocumentLockedException status tidak sesuai jalur
      * @throws SigningIncompleteException ada signing_request 'diminta' menggantung
-     * @throws RuntimeException          berkas gagal ditulis ke disk documents
+     * @throws RuntimeException berkas gagal ditulis ke disk documents
      */
     private function persist(Document $doc, string $method, string $bytes, bool $reissue = false, ?string $note = null, ?int $actorId = null): Issuance
     {
         $actorId ??= auth()->id();
 
-        return DB::connection($doc->getConnectionName())->transaction(function () use ($doc, $method, $bytes, $reissue, $note, $actorId): Issuance {
-            // Re-read DALAM lock: keputusan guard dibuat atas kondisi
-            // terkini, bukan atas snapshot model yang dipanggil.
-            /** @var Document $locked */
-            $locked = Document::query()->whereKey($doc->id)->lockForUpdate()->firstOrFail();
+        // Path berkas yang mungkin tertulis selama transaksi — dipantau
+        // (by-ref) agar catch di bawah tahu apa yang harus dibersihkan.
+        $writtenPath = null;
 
-            $allowedStatus = $reissue ? ['terbit'] : ['draft', 'menunggu_ttd'];
-            if (! in_array($locked->status, $allowedStatus, true)) {
-                throw new DocumentLockedException(
-                    "Status '{$locked->status}' tidak mengizinkan ".($reissue ? 'reissue' : 'finalize')
-                    ." (diharapkan '".implode("'|'", $allowedStatus)."').",
+        try {
+            return DB::connection($doc->getConnectionName())->transaction(function () use ($doc, $method, $bytes, $reissue, $note, $actorId, &$writtenPath): Issuance {
+                // Re-read DALAM lock: keputusan guard dibuat atas kondisi
+                // terkini, bukan atas snapshot model yang dipanggil.
+                /** @var Document $locked */
+                $locked = Document::query()->whereKey($doc->id)->lockForUpdate()->firstOrFail();
+
+                $allowedStatus = $reissue ? ['terbit'] : ['draft', 'menunggu_ttd'];
+                if (! in_array($locked->status, $allowedStatus, true)) {
+                    throw new DocumentLockedException(
+                        "Status '{$locked->status}' tidak mengizinkan ".($reissue ? 'reissue' : 'finalize')
+                        ." (diharapkan '".implode("'|'", $allowedStatus)."').",
+                    );
+                }
+
+                if (SigningRequest::query()
+                    ->where('document_id', $locked->id)
+                    ->where('status', 'diminta')
+                    ->exists()) {
+                    throw new SigningIncompleteException('Masih ada signing_request berstatus diminta yang belum diputuskan.');
+                }
+
+                // Nomor surat dicadangkan saat finalize bila surat lahir tanpa
+                // nomor. Kolom number NOT NULL di skema, jadi pra-nomor
+                // direpresentasikan string kosong (null tetap ditangani bila
+                // konstrain skema dilonggarkan nanti).
+                if ($locked->number === null || $locked->number === '') {
+                    ['seq' => $seq, 'number' => $number] = $this->numbering->reserve(
+                        $locked->letterType()->firstOrFail()->code,
+                        $locked->unit,
+                        $locked->year,
+                    );
+                    $locked->number = $number;
+                    $locked->seq = $seq;
+                }
+
+                // Hash lampiran: sha256 dari json daftar sha256 lampiran
+                // terurut — null bila surat tak berlampiran.
+                $attachmentHashes = $locked->attachments()->orderBy('sha256')->pluck('sha256')->values()->all();
+                $attachmentsSha256 = $attachmentHashes === []
+                    ? null
+                    : hash('sha256', json_encode($attachmentHashes));
+
+                // UUID dibuat DI DALAM transaksi sebelum berkas ditulis —
+                // path berkas diturunkan darinya sehingga baris dan berkas
+                // selalu sepakat.
+                $issuanceId = (string) Str::uuid();
+                $filePath = sprintf('%d/%s/issuance-%s.pdf', $locked->year, $locked->id, $issuanceId);
+
+                $issuance = new Issuance;
+                $issuance->id = $issuanceId;
+                $issuance->document_id = $locked->id;
+                $issuance->method = $method;
+                $issuance->method_label = self::METHOD_LABELS[$method];
+                $issuance->file_path = $filePath;
+                $issuance->file_sha256 = hash('sha256', $bytes);
+                $issuance->attachments_sha256 = $attachmentsSha256;
+                $issuance->file_size = strlen($bytes);
+                $issuance->note = $note;
+                $issuance->is_active = true;
+                $issuance->finalized_by = $actorId;
+                $issuance->finalized_at = now();
+                $issuance->save();
+
+                // Nonaktifkan issuance aktif lama (finalize pertama biasanya
+                // tak ada; reissue pasti ada satu). Baris baru sudah ter-insert
+                // lebih dulu agar self-FK replaced_by_id sah.
+                Issuance::query()
+                    ->where('document_id', $locked->id)
+                    ->where('is_active', true)
+                    ->whereKeyNot($issuanceId)
+                    ->update([
+                        'is_active' => false,
+                        'replaced_by_id' => $issuanceId,
+                    ]);
+
+                // Tulis berkas DI DALAM transaksi: gagal tulis → exception →
+                // rollback seluruh mutasi DB di atas (lihat catatan kelas).
+                if (Storage::disk('documents')->put($filePath, $bytes) === false) {
+                    throw new RuntimeException("Gagal menulis berkas issuance ke disk documents: {$filePath}.");
+                }
+
+                // Tandai berkas sudah ada di disk — mulai sini kegagalan apa
+                // pun sisa transaksi (status/audit/commit) harus dibersihkan
+                // oleh catch di bawah.
+                $writtenPath = $filePath;
+
+                $locked->status = 'terbit';
+                $locked->save();
+
+                $this->audit->log(
+                    $locked,
+                    $reissue ? AuditLogger::EVENT_REISSUED : AuditLogger::EVENT_FINALIZED,
+                    $actorId,
+                    array_filter([
+                        'method' => $method,
+                        'method_label' => self::METHOD_LABELS[$method],
+                        'issuance_id' => $issuanceId,
+                        'file_sha256' => $issuance->file_sha256,
+                        'note' => $note,
+                    ], fn ($value) => $value !== null),
                 );
+
+                return Issuance::query()->findOrFail($issuanceId);
+            });
+        } catch (\Throwable $e) {
+            // Berkas yatim: transaksi sudah rollback (DB konsisten), tapi
+            // berkas yang tertulis sebelum kegagalan tidak ikut rollback.
+            // Dihapus best-effort lalu exception ASLI dilempar ulang —
+            // bebas race karena path memuat uuid issuance yang gagal
+            // ter-commit dan tak akan pernah dipakai ulang.
+            if ($writtenPath !== null) {
+                Storage::disk('documents')->delete($writtenPath);
             }
 
-            if (SigningRequest::query()
-                ->where('document_id', $locked->id)
-                ->where('status', 'diminta')
-                ->exists()) {
-                throw new SigningIncompleteException('Masih ada signing_request berstatus diminta yang belum diputuskan.');
-            }
-
-            // Nomor surat dicadangkan saat finalize bila surat lahir tanpa
-            // nomor. Kolom number NOT NULL di skema, jadi pra-nomor
-            // direpresentasikan string kosong (null tetap ditangani bila
-            // konstrain skema dilonggarkan nanti).
-            if ($locked->number === null || $locked->number === '') {
-                ['seq' => $seq, 'number' => $number] = $this->numbering->reserve(
-                    $locked->letterType()->firstOrFail()->code,
-                    $locked->unit,
-                    $locked->year,
-                );
-                $locked->number = $number;
-                $locked->seq = $seq;
-            }
-
-            // Hash lampiran: sha256 dari json daftar sha256 lampiran
-            // terurut — null bila surat tak berlampiran.
-            $attachmentHashes = $locked->attachments()->orderBy('sha256')->pluck('sha256')->values()->all();
-            $attachmentsSha256 = $attachmentHashes === []
-                ? null
-                : hash('sha256', json_encode($attachmentHashes));
-
-            // UUID dibuat DI DALAM transaksi sebelum berkas ditulis —
-            // path berkas diturunkan darinya sehingga baris dan berkas
-            // selalu sepakat.
-            $issuanceId = (string) Str::uuid();
-            $filePath = sprintf('%d/%s/issuance-%s.pdf', $locked->year, $locked->id, $issuanceId);
-
-            $issuance = new Issuance;
-            $issuance->id = $issuanceId;
-            $issuance->document_id = $locked->id;
-            $issuance->method = $method;
-            $issuance->method_label = self::METHOD_LABELS[$method];
-            $issuance->file_path = $filePath;
-            $issuance->file_sha256 = hash('sha256', $bytes);
-            $issuance->attachments_sha256 = $attachmentsSha256;
-            $issuance->file_size = strlen($bytes);
-            $issuance->note = $note;
-            $issuance->is_active = true;
-            $issuance->finalized_by = $actorId;
-            $issuance->finalized_at = now();
-            $issuance->save();
-
-            // Nonaktifkan issuance aktif lama (finalize pertama biasanya
-            // tak ada; reissue pasti ada satu). Baris baru sudah ter-insert
-            // lebih dulu agar self-FK replaced_by_id sah.
-            Issuance::query()
-                ->where('document_id', $locked->id)
-                ->where('is_active', true)
-                ->whereKeyNot($issuanceId)
-                ->update([
-                    'is_active' => false,
-                    'replaced_by_id' => $issuanceId,
-                ]);
-
-            // Tulis berkas DI DALAM transaksi: gagal tulis → exception →
-            // rollback seluruh mutasi DB di atas (lihat catatan kelas).
-            if (Storage::disk('documents')->put($filePath, $bytes) === false) {
-                throw new RuntimeException("Gagal menulis berkas issuance ke disk documents: {$filePath}.");
-            }
-
-            $locked->status = 'terbit';
-            $locked->save();
-
-            $this->audit->log(
-                $locked,
-                $reissue ? AuditLogger::EVENT_REISSUED : AuditLogger::EVENT_FINALIZED,
-                $actorId,
-                array_filter([
-                    'method' => $method,
-                    'method_label' => self::METHOD_LABELS[$method],
-                    'issuance_id' => $issuanceId,
-                    'file_sha256' => $issuance->file_sha256,
-                    'note' => $note,
-                ], fn ($value) => $value !== null),
-            );
-
-            return Issuance::query()->findOrFail($issuanceId);
-        });
+            throw $e;
+        }
     }
 }
