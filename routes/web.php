@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Public\VerifyController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -12,3 +13,24 @@ Route::get('/', function () {
 Route::get('/up', function () {
     return 'ok';
 });
+
+// Halaman verifikasi + unduhan publik (Task 17) — target pemindaian QR
+// "{domain}/verify/{uuid}". TANPA auth: uuid surat yang acak adalah
+// otorisasinya; dilindungi throttle `verify` (limit per menit per IP dari
+// config document.verify_rate_limit, limiter didaftarkan di
+// bootstrap/app.php). Halaman & unduhan menyajikan diri sendiri (blade
+// + CSS inline, tanpa JS/framework) supaya ringan di ponsel pemindai QR.
+Route::get('/verify/{uuid}', [VerifyController::class, 'show'])
+    ->name('verify.show')
+    ->middleware('throttle:verify')
+    ->whereUuid('uuid');
+
+Route::get('/verify/{uuid}/file', [VerifyController::class, 'file'])
+    ->name('verify.file')
+    ->middleware('throttle:verify')
+    ->whereUuid('uuid');
+
+Route::get('/verify/{uuid}/attachments/{attachment}', [VerifyController::class, 'attachment'])
+    ->name('verify.attachment')
+    ->middleware('throttle:verify')
+    ->whereUuid('uuid', 'attachment');
