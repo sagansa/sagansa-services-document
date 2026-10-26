@@ -1,6 +1,10 @@
 <?php
 
+use App\Http\Controllers\Api\V1\AttachmentController;
 use App\Http\Controllers\Api\V1\DocumentController;
+use App\Http\Controllers\Api\V1\LetterTypeController;
+use App\Http\Controllers\Api\V1\PartyController;
+use App\Http\Controllers\Api\V1\TemplateController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -21,6 +25,20 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'document.role'])->group(functi
     Route::get('/documents/{id}', [DocumentController::class, 'show'])->whereUuid('id');
     Route::patch('/documents/{id}', [DocumentController::class, 'update'])->whereUuid('id');
     Route::post('/documents/{id}/numbering/reserve', [DocumentController::class, 'reserveNumber'])->whereUuid('id');
+
+    // Lampiran surat (Task 14) — hanya draft|menunggu_ttd di controller.
+    Route::post('/documents/{id}/attachments', [AttachmentController::class, 'store'])->whereUuid('id');
+    Route::delete('/documents/{id}/attachments/{attachmentId}', [AttachmentController::class, 'destroy'])
+        ->whereUuid('id', 'attachmentId');
+
+    // Buku pihak eksternal (Task 14).
+    Route::get('/parties', [PartyController::class, 'index']);
+    Route::post('/parties', [PartyController::class, 'store']);
+    Route::patch('/parties/{id}', [PartyController::class, 'update'])->whereNumber('id');
+
+    // Wizard (Task 14): jenis surat aktif + template per jenis.
+    Route::get('/letter-types', [LetterTypeController::class, 'index']);
+    Route::get('/templates', [TemplateController::class, 'index']);
 
     Route::get('/me/signer', [DocumentController::class, 'meSigner']);
 });
