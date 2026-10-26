@@ -1,0 +1,92 @@
+<?php
+
+namespace App\Services;
+
+use App\Models\NumberSequence;
+use DateTimeInterface;
+
+/**
+ * Penerbitan nomor surat berurutan per (letter_type_code, unit, year).
+ *
+ * Counter disimpan pada tabel number_sequences.last_seq. Setiap reserve
+ * berjalan DALAM transaksi pada koneksi mysql_document:
+ *
+ *   1. pastikan baris counter ada (insertOrIgnore — setara
+ *      firstOrCreate, tapi kebal race: unique key menolak duplikat
+ *      sehingga dua transaksi yang membuat baris bersamaan tidak
+ *      saling gagal);
+ *   2. kunci baris (MySQL: SELECT ... FOR UPDATE);
+ *   3. increment last_seq lalu baca nilai barunya DI DALAM lock.
+ *
+ * Dengan begitu dua reserve paralel untuk counter yang sama selalu
+ * mendapat seq berurutan tanpa duplikat. Transaksi diulang beberapa
+ * kali bila koneksi lain sedang memegang write lock (contoh sqlite
+ * "database is locked" terdeteksi sebagai concurrency error oleh
+ * Laravel dan di-retry otomatis).
+ */
+class NumberingService
+{
+    /**
+     * Cadangkan nomor urut berikutnya untuk (jenis, unit, tahun).
+     *
+     * Format nomor: %03d/{code}/{unit}/{romanMonth}/{year},
+     * contoh 001/ST/DIR/X/2026.
+     *
+     * @return array{seq: int, number: string}
+     */
+    public function reserve(string $letterTypeCode, string $unit, int $year): array
+    {
+        $attributes = [
+            'letter_type_code' => $letterTypeCode,
+            'unit' => $unit,
+            'year' => $year,
+        ];
+
+        // Transaksi DIJALANKAN pada koneksi model (mysql_document), bukan
+        // koneksi default — di test koneksi default adalah sqlite :memory:
+        // yang tidak memiliki tabel number_sequences.
+        $seq = NumberSequence::query()->getConnection()->transaction(function () use ($attributes): int {
+            NumberSequence::query()->insertOrIgnore(
+                [...$attributes, 'last_seq' => 0],
+            );
+
+            /** @var NumberSequence $sequence */
+            $sequence = NumberSequence::query()
+                ->where($attributes)
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            NumberSequence::query()
+                ->whereKey($sequence->id)
+                ->increment('last_seq');
+
+            return (int) NumberSequence::query()
+                ->whereKey($sequence->id)
+                ->value('last_seq');
+        }, attempts: 5);
+
+        $number = sprintf(
+            '%03d/%s/%s/%s/%d',
+            $seq,
+            $letterTypeCode,
+            $unit,
+            self::romanMonth(now()),
+            $year,
+        );
+
+        return ['seq' => $seq, 'number' => $number];
+    }
+
+    /**
+     * Angka romawi bulan (I..XII) dari tanggal — dipakai pada segmen
+     * bulan nomor surat.
+     *
+     * @return string nilai I..XII
+     */
+    private static function romanMonth(DateTimeInterface $date): string
+    {
+        $roman = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII'];
+
+        return $roman[(int) $date->format('n') - 1];
+    }
+}
