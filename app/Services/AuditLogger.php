@@ -63,6 +63,9 @@ class AuditLogger
     /** Disposisi diselesaikan oleh penerima. */
     public const EVENT_DISPOSITION_COMPLETED = 'disposition_completed';
 
+    /** Surat ditautkan ke runutan (letter_links, fase 1b). */
+    public const EVENT_LETTER_LINKED = 'letter_linked';
+
     /**
      * Catat satu baris jejak audit untuk sebuah surat.
      *
