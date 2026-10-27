@@ -481,7 +481,8 @@ class DocumentApiTest extends TestCase
         // Draft → body_html ikut (editor wizard membuka kembali isinya).
         $this->getJson("/api/v1/documents/{$draft->id}")
             ->assertOk()
-            ->assertJsonPath('data.body_html', '<p>Isi draft</p>');
+            ->assertJsonPath('data.body_html', '<p>Isi draft</p>')
+            ->assertJsonPath('data.unit', 'DIR');
 
         // menunggu_ttd masih editable → tetap ikut.
         $draft->forceFill(['status' => 'menunggu_ttd'])->save();
@@ -500,7 +501,8 @@ class DocumentApiTest extends TestCase
         ]);
         $this->getJson("/api/v1/documents/{$published->id}")
             ->assertOk()
-            ->assertJsonMissing(['body_html']);
+            ->assertJsonMissing(['body_html'])
+            ->assertJsonPath('data.unit', 'DIR');
     }
 
     #[Test]

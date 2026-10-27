@@ -47,6 +47,14 @@ class DocumentResource extends JsonResource
                 fn () => $this->body_html,
             ),
 
+            // Unit pembuat nomor — ikut bentuk detail saja (kounter nomor
+            // memuat {jenis}/{unit}/{seq}/...); detail & wizard edit mobile
+            // menampilkannya, list tetap ramping.
+            'unit' => $this->when(
+                $this->resource->relationLoaded('issuances'),
+                fn () => $this->unit,
+            ),
+
             // ——— bentuk detail (whenLoaded) ———
             'active_issuance' => $this->whenLoaded('activeIssuance', fn () => $this->activeIssuance !== null ? [
                 'id' => $this->activeIssuance->id,
