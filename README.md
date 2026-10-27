@@ -112,6 +112,10 @@ Alur C dipakai bila surat harus ditandatangani secara elektronik resmi (mis. via
 5. Pastikan `storage/app/documents` TIDAK bisa diakses web (disk private, di luar `public/`) dan eksekusi PHP di-disable di bawah `storage/`.
 6. **`/verify/{uuid}` adalah URL PERMANEN yang tercetak pada QR setiap surat terbit** — domain `document.sagansa.id` tidak boleh berpindah/break setelah surat pertama terbit, karena QR lama tetap menunjuk ke sana.
 
+### Queue
+
+Fase 1 memakai `QUEUE_CONNECTION=sync` — satu-satunya job saat ini (`RecordVerificationHitJob`) dieksekusi inline dalam request; volume verifikasi fase 1 masih rendah sehingga worker tidak diperlukan. Bila volume naik: ganti `QUEUE_CONNECTION=database`, pastikan tabel `jobs` ter-migrate (migration lokal service ini, bukan domain `services/migration`), lalu jalankan `php artisan queue:work` di supervisor (autorestart, `--tries=3`).
+
 ## Backup
 
 - **Disk `storage/app/documents` WAJIB ikut backup** — berkas PDF terbitan + lampiran TIDAK bisa diregenerasi dari DB (metode c/d menyimpan bytes hasil upload/tanda tangan pihak luar).
