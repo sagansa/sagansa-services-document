@@ -162,6 +162,27 @@ class VerifyPublicTest extends TestCase
         $this->get("/verify/{$document->id}/attachments/{$attachment->id}")->assertForbidden();
     }
 
+    /**
+     * Fix minor 8 — rahasia: riwayat terbitan tampil (metadata), tapi
+     * note reissue DISENSOR (note bebas teks user → janji halaman
+     * rahasia adalah "metadata saja").
+     */
+    #[Test]
+    public function dokumen_rahasia_riwayat_tampil_tanpa_note_reissue(): void
+    {
+        $document = $this->makeLetter(['classification' => 'rahasia', 'subject' => 'Perihal Sangat Rahasia']);
+        $this->finalizer->finalizeFromContent($document, 77);
+        $this->finalizer->reissue($document, 'a', fn (): string => '%PDF-1.4 revisi', 'membahas Perihal Sangat Rahasia', 77);
+
+        $response = $this->get("/verify/{$document->id}");
+
+        $response->assertOk();
+        $this->assertSame(2, substr_count($response->getContent(), 'class="riwayat-item"'), 'riwayat dua terbitan tetap tampil');
+        $response->assertSee('digantikan');
+        $response->assertSee('berlaku');
+        $response->assertDontSee('membahas Perihal Sangat Rahasia', 'note reissue harus disensor untuk rahasia');
+    }
+
     #[Test]
     public function unduhan_file_dokumen_belum_terbit_ditolak_404_netral(): void
     {

@@ -104,7 +104,7 @@ class VerifyController extends Controller
             'subject' => ($secret || ! in_array($document->status, ['terbit', 'dicabut', 'dibatalkan'], true)) ? null : $document->subject,
             'signers' => $this->signerNames($document),
             'activeIssuance' => $published && $document->activeIssuance !== null ? $this->issuanceCard($document->activeIssuance) : null,
-            'history' => $this->history($document),
+            'history' => $this->history($document, $secret),
             'attachments' => $this->attachmentCards($document, $published && ! $secret),
             'secret' => $secret,
             'canDownload' => $published && ! $secret,
@@ -285,12 +285,17 @@ class VerifyController extends Controller
     }
 
     /**
-     * Riwayat terbitan terbaru duluan: tanggal, metode, berlaku/digantikan,
+     * Riwayat terbitan terbaru dulu: tanggal, metode, berlaku/digantikan,
      * note alasan penggantian bila ada.
+     *
+     * Klasifikasi rahasia: riwayat tetap tampil (tanggal/metode/status
+     * adalah metadata), tapi note DISENSOR (null) — janji halaman
+     * verifikasi rahasia adalah "metadata saja" dan note reissue bebas
+     * teks user (bisa memuat isi/alasan sensitif).
      *
      * @return list<array<string, mixed>>
      */
-    private function history(Document $document): array
+    private function history(Document $document, bool $secret): array
     {
         return $document->issuances()
             ->orderByDesc('finalized_at')
@@ -300,7 +305,7 @@ class VerifyController extends Controller
                 'date' => $this->formatDate($issuance->finalized_at),
                 'methodText' => self::METHOD_TEXT[$issuance->method_label] ?? $issuance->method_label,
                 'state' => $issuance->is_active ? 'berlaku' : 'digantikan',
-                'note' => $issuance->note,
+                'note' => $secret ? null : $issuance->note,
             ])
             ->all();
     }
