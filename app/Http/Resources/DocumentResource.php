@@ -3,6 +3,8 @@
 namespace App\Http\Resources;
 
 use App\Models\Document;
+use App\Models\IncomingLetter;
+use App\Models\LetterLink;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -55,6 +57,16 @@ class DocumentResource extends JsonResource
                 fn () => $this->unit,
             ),
 
+            // Induk runutan (Task 6 fase 1b) — ikut bentuk detail: chip
+            // IDENTITAS saja (type/id/nomor|agenda/relasi), isi surat induk
+            // tidak dibocorkan; null bila surat ini bukan child edge mana
+            // pun. Edge terbaru dipakai (edge lama tidak pernah dihapus —
+            // append-only; praktiknya satu child paling banyak satu induk).
+            'in_reply_to' => $this->when(
+                $this->resource->relationLoaded('issuances'),
+                fn () => $this->inReplyToIdentity(),
+            ),
+
             // ——— bentuk detail (whenLoaded) ———
             'active_issuance' => $this->whenLoaded('activeIssuance', fn () => $this->activeIssuance !== null ? [
                 'id' => $this->activeIssuance->id,
@@ -91,6 +103,44 @@ class DocumentResource extends JsonResource
                     'role' => $signingRequest->signer->role,
                 ] : null,
             ])->all()),
+        ];
+    }
+
+    /**
+     * Identitas ringkas induk runutan: edge TERBARU yang menjadikan surat
+     * ini child (kunci child_type='document' — resource ini untuk Document),
+     * lalu nomor/agenda baris induknya. Hanya identitas — isi induk tidak
+     * ikut (chip "membalas surat X" cukup tahu siapa X).
+     *
+     * @return array{type: string, id: string, number_or_agenda: string|null, relation: string}|null
+     */
+    private function inReplyToIdentity(): ?array
+    {
+        /** @var LetterLink|null $edge */
+        $edge = LetterLink::query()
+            ->where('child_type', 'document')
+            ->where('child_id', $this->id)
+            ->orderByDesc('created_at')
+            ->orderByDesc('id')
+            ->first();
+
+        if ($edge === null) {
+            return null;
+        }
+
+        [$parentType, $parentId] = $edge->parentKey();
+
+        // value() cukup satu kolom; null juga bila baris induk sudah
+        // tidak ada (edge append-only bertahan — tetap tampilkan identitas).
+        $number = $parentType === 'document'
+            ? Document::query()->whereKey($parentId)->value('number')
+            : IncomingLetter::query()->whereKey($parentId)->value('agenda_number');
+
+        return [
+            'type' => $parentType,
+            'id' => $parentId,
+            'number_or_agenda' => $number,
+            'relation' => $edge->relation,
         ];
     }
 }

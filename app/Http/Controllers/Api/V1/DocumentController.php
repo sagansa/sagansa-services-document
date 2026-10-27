@@ -10,6 +10,7 @@ use App\Models\DocumentAttachment;
 use App\Models\LetterType;
 use App\Models\Signer;
 use App\Services\AuditLogger;
+use App\Services\LetterLinkService;
 use App\Services\NumberingService;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
@@ -43,6 +44,7 @@ class DocumentController extends Controller
     public function __construct(
         private readonly NumberingService $numbering = new NumberingService,
         private readonly AuditLogger $audit = new AuditLogger,
+        private readonly LetterLinkService $links = new LetterLinkService,
     ) {}
 
     /**
@@ -85,6 +87,15 @@ class DocumentController extends Controller
      * duplicate_from_id: sumber WAJIB 'terbit' (validasi); isi + lampiran
      * disalin (berkas lampiran di-copy di disk documents dengan path uuid
      * baru — sha256 & size identik karena bytes identik).
+     *
+     * in_reply_to {type,id,relation} (Task 6 fase 1b): tautkan draft baru
+     * sebagai child surat induk. Independen dari duplicate_from_id —
+     * duplikasi menyalin ISI surat, in_reply_to menautkan draft HASIL ke
+     * target runutan. Keberadaan target dipreflight SEBELUM draft dibuat
+     * (LinkTargetNotFoundException → 422, tanpa draft yatim); edge sendiri
+     * ditulis DALAM transaksi yang sama dengan draft — siklus mustahil
+     * untuk draft baru (belum punya edge), sisanya (race target terhapus)
+     * ikut rollback bersama draft.
      */
     public function store(Request $request): JsonResponse
     {
@@ -96,6 +107,14 @@ class DocumentController extends Controller
         $source = isset($validated['duplicate_from_id'])
             ? Document::query()->findOrFail($validated['duplicate_from_id'])
             : null;
+
+        $inReplyTo = $validated['in_reply_to'] ?? null;
+
+        // Preflight keberadaan induk SEBELUM baris draft ditulis — kasus
+        // tolak paling umum gagal tanpa efek samping apa pun.
+        if ($inReplyTo !== null) {
+            $this->links->assertNodeExists($inReplyTo['type'], $inReplyTo['id']);
+        }
 
         $user = $request->user();
 
@@ -125,7 +144,7 @@ class DocumentController extends Controller
         $writtenPaths = [];
 
         try {
-            DB::connection($document->getConnectionName())->transaction(function () use ($document, $source, $user, $request, &$writtenPaths): void {
+            DB::connection($document->getConnectionName())->transaction(function () use ($document, $source, $user, $request, $inReplyTo, &$writtenPaths): void {
                 $document->save();
 
                 $this->audit->log(
@@ -136,6 +155,21 @@ class DocumentController extends Controller
                     $request->ip(),
                     $this->userAgent($request),
                 );
+
+                // Edge in_reply_to ditulis DALAM transaksi draft (koneksi
+                // sama → savepoint): bila link() melempar (mis. target
+                // terhapus di race setelah preflight), draft ikut rollback —
+                // mustahil menyisakan draft tanpa induk yang diminta user.
+                if ($inReplyTo !== null) {
+                    $this->links->link(
+                        $inReplyTo['type'],
+                        $inReplyTo['id'],
+                        'document',
+                        $document->id,
+                        $inReplyTo['relation'],
+                        (int) $user->id,
+                    );
+                }
 
                 foreach ($source?->attachments ?? [] as $attachment) {
                     $contents = Storage::disk('documents')->get($attachment->path);
@@ -363,6 +397,14 @@ class DocumentController extends Controller
                 // Sumber duplikasi wajib sudah terbit (else 422).
                 Rule::exists('mysql_document.documents', 'id')->where('status', 'terbit'),
             ],
+            // Induk runutan draft baru (Task 6 fase 1b) — keberadaan node
+            // TIDAK di rule exists (butuh cabang per tipe document|
+            // incoming_letter); dipreflight via LetterLinkService agar
+            // pesan + kode LINK_TARGET_NOT_FOUND konsisten dengan link().
+            'in_reply_to' => ['nullable', 'array:type,id,relation'],
+            'in_reply_to.type' => ['required_with:in_reply_to', 'string', Rule::in(['document', 'incoming_letter'])],
+            'in_reply_to.id' => ['required_with:in_reply_to', 'uuid'],
+            'in_reply_to.relation' => ['required_with:in_reply_to', 'string', Rule::in(['balasan', 'tindak_lanjut', 'referensi'])],
         ];
     }
 
@@ -404,6 +446,13 @@ class DocumentController extends Controller
             'letter_type_code.exists' => 'Kode jenis surat tidak ditemukan atau tidak aktif.',
             'template_id.exists' => 'Template tidak ditemukan.',
             'duplicate_from_id.exists' => 'Surat sumber duplikasi tidak ditemukan atau belum berstatus terbit.',
+            'in_reply_to.array' => 'in_reply_to harus berupa objek dengan kunci type, id, dan relation.',
+            'in_reply_to.type.required_with' => 'Tipe surat induk wajib diisi bila in_reply_to dikirim.',
+            'in_reply_to.type.in' => 'Tipe surat induk harus salah satu dari: :values.',
+            'in_reply_to.id.required_with' => 'Id surat induk wajib diisi bila in_reply_to dikirim.',
+            'in_reply_to.id.uuid' => 'Id surat induk harus berupa UUID yang valid.',
+            'in_reply_to.relation.required_with' => 'Relasi surat induk wajib diisi bila in_reply_to dikirim.',
+            'in_reply_to.relation.in' => 'Relasi surat induk harus salah satu dari: :values.',
         ];
     }
 
@@ -425,6 +474,10 @@ class DocumentController extends Controller
             'company_id' => 'perusahaan',
             'template_id' => 'template',
             'duplicate_from_id' => 'surat sumber duplikasi',
+            'in_reply_to' => 'induk runutan',
+            'in_reply_to.type' => 'tipe surat induk',
+            'in_reply_to.id' => 'id surat induk',
+            'in_reply_to.relation' => 'relasi surat induk',
         ];
     }
 

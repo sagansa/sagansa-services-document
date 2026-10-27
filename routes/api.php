@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\V1\DispositionController;
 use App\Http\Controllers\Api\V1\DocumentController;
 use App\Http\Controllers\Api\V1\IncomingLetterController;
 use App\Http\Controllers\Api\V1\IssuanceController;
+use App\Http\Controllers\Api\V1\LetterThreadController;
 use App\Http\Controllers\Api\V1\LetterTypeController;
 use App\Http\Controllers\Api\V1\PartyController;
 use App\Http\Controllers\Api\V1\SignerController;
@@ -76,6 +77,13 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'document.role'])->group(functi
     Route::get('/incoming-letters/{id}/scan', [IncomingLetterController::class, 'scan'])->whereUuid('id');
     Route::post('/incoming-letters/{id}/dispositions', [DispositionController::class, 'store'])->whereUuid('id');
     Route::post('/dispositions/{id}/complete', [DispositionController::class, 'complete'])->whereUuid('id');
+
+    // Runutan surat lintas jenis (fase 1b): thread dari node mana pun.
+    // Tipe tak sah ditolak routing (whereIn → 404 netral, sama seperti
+    // penolakan di controller — belt & suspenders).
+    Route::get('/letters/thread/{type}/{id}', [LetterThreadController::class, 'show'])
+        ->whereIn('type', ['document', 'incoming_letter'])
+        ->whereUuid('id');
 });
 
 // Unduhan hasil pra-final (Task 16) — DI LUAR grup auth: URL signed-nya

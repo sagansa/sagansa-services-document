@@ -44,6 +44,37 @@ class LetterLinkService
     public function __construct(private readonly AuditLogger $audit = new AuditLogger) {}
 
     /**
+     * Pastikan node surat ada pada tabel tipenya — preflight PUBLIK bagi
+     * pemanggil yang perlu memvalidasi target SEBELUM menulis baris apa
+     * pun (mis. POST /documents + in_reply_to: gagal sebelum draft dibuat
+     * berarti tidak pernah ada draft yatim, Task 6 fase 1b).
+     *
+     * @param  string  $type  'document' | 'incoming_letter'
+     * @param  string  $id  uuid node
+     *
+     * @throws InvalidArgumentException tipe node tidak dikenal
+     * @throws LinkTargetNotFoundException node tidak ada pada tabel tipenya
+     */
+    public function assertNodeExists(string $type, string $id): void
+    {
+        if (! in_array($type, self::NODE_TYPES, true)) {
+            throw new InvalidArgumentException(sprintf(
+                "Tipe node surat tidak dikenal: '%s' (yang sah: document|incoming_letter).",
+                $type,
+            ));
+        }
+
+        if (! $this->nodeExists($type, $id)) {
+            throw new LinkTargetNotFoundException(sprintf(
+                "Node surat tidak ditemukan: %s '%s' tidak ada pada tabel %s.",
+                $type,
+                $id,
+                $type === 'document' ? 'documents' : 'incoming_letters',
+            ));
+        }
+    }
+
+    /**
      * Tautkan child sebagai keturunan parent.
      *
      * @param  string  $parentType  'document' | 'incoming_letter'
@@ -162,9 +193,7 @@ class LetterLinkService
      */
     private function assertTargetExists(string $role, string $type, string $id): void
     {
-        $query = $type === 'document' ? Document::query() : IncomingLetter::query();
-
-        if (! $query->whereKey($id)->exists()) {
+        if (! $this->nodeExists($type, $id)) {
             throw new LinkTargetNotFoundException(sprintf(
                 "Target link tidak ditemukan: %s %s '%s' tidak ada pada tabel %s.",
                 $role,
@@ -173,6 +202,16 @@ class LetterLinkService
                 $type === 'document' ? 'documents' : 'incoming_letters',
             ));
         }
+    }
+
+    /**
+     * Apakah baris node ada pada tabel tipenya?
+     */
+    private function nodeExists(string $type, string $id): bool
+    {
+        $query = $type === 'document' ? Document::query() : IncomingLetter::query();
+
+        return $query->whereKey($id)->exists();
     }
 
     /**
