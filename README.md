@@ -72,7 +72,7 @@ curl -X POST https://document.sagansa.id/api/v1/documents/<uuid>/finalize \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"method":"a"}'
-# → {"success":true,"data":{"issuance":{...},"verify_url":"https://document.sagansa.id/verify/<uuid>","number":"001/SKD/DIR/X/2026"}}
+# → {"success":true,"data":{"issuance":{...},"verify_url":"https://document.sagansa.id/verify/<uuid>","number":"001/SKK/DIR/X/2026"}}
 
 # Verifikasi publik (tanpa token — pindai QR surat)
 curl https://document.sagansa.id/verify/<uuid>
