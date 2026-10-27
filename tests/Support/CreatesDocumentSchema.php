@@ -7,13 +7,14 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 /**
- * Membuat ke-11 tabel domain surat pada koneksi `mysql_document`.
+ * Membuat ke-14 tabel domain surat pada koneksi `mysql_document`.
  *
  * Service ini TIDAK memiliki migration domain (skema dikelola
  * services/migration). Untuk testing, koneksi `mysql_document` saat
  * APP_ENV=testing ditukar ke file sqlite `database_test_document.sqlite`
  * (config/database.php); trait ini menirukan skema persis dari
  * services/migration/database/migrations/2026_10_26_000{001,002}_create_document_*_tables.php
+ * dan 2026_10_27_000100_create_incoming_letter_tables.php
  * di koneksi tersebut.
  *
  * Pemakaian (dipakai ulang semua feature test domain surat):
@@ -50,13 +51,18 @@ trait CreatesDocumentSchema
     }
 
     /**
-     * Nama ke-11 tabel domain surat, urut anak-dulu (aman untuk drop).
+     * Nama ke-14 tabel domain surat, urut anak-dulu (aman untuk drop).
      *
      * @return list<string>
      */
     protected function documentTables(): array
     {
         return [
+            // Fase 1b (surat masuk) — anak dari parties.
+            'letter_links',
+            'disposition_records',
+            'incoming_letters',
+            // Fase 1.
             'verification_hits',
             'audit_logs',
             'signing_requests',
@@ -269,6 +275,79 @@ trait CreatesDocumentSchema
             $table->uuid('document_id')->index();
             $table->ipAddress('ip')->nullable();
             $table->timestamp('created_at')->nullable();
+        });
+
+        // 12. incoming_letters — registrasi surat masuk (fase 1b), PK uuid.
+        //     sender_party_id RESTRICT (migration 2026_10_27_000100): pihak
+        //     yang masih dikutip surat masuk tidak boleh dihapus.
+        //     Scan bukti tunggal + status + agenda diatur service, bukan
+        //     mass-assignment (lihat IncomingLetter::$fillable).
+        $schema->create('incoming_letters', function (Blueprint $table) {
+            $table->uuid('id')->primary();
+            $table->uuid('company_id')->nullable();
+            $table->string('agenda_number')->unique();
+            $table->integer('agenda_seq');
+            $table->integer('year');
+            $table->string('number_external')->nullable();
+            $table->date('letter_date')->nullable();
+            $table->date('received_at');
+            $table->foreignId('sender_party_id')
+                ->constrained('parties')
+                ->cascadeOnUpdate()
+                ->restrictOnDelete();
+            $table->string('subject');
+            $table->enum('sifat', ['biasa', 'segera', 'rahasia'])->default('biasa');
+            $table->enum('classification', ['umum', 'rahasia'])->default('umum');
+            $table->enum('status', ['terdaftar', 'diproses', 'selesai'])->default('terdaftar');
+            $table->string('scan_path');
+            $table->char('scan_sha256', 64);
+            $table->integer('scan_size');
+            $table->integer('scan_pages')->nullable();
+            $table->text('attachments_note')->nullable();
+            $table->unsignedBigInteger('created_by');
+            $table->timestamps();
+
+            $table->index(['status', 'year']);
+        });
+
+        // 13. disposition_records — disposisi per surat masuk, append-only:
+        //     hanya created_at, TANPA updated_at (UPDATED_AT = null di model).
+        $schema->create('disposition_records', function (Blueprint $table) {
+            $table->uuid('id')->primary();
+            $table->foreignUuid('incoming_letter_id')
+                ->constrained('incoming_letters')
+                ->cascadeOnUpdate()
+                ->cascadeOnDelete();
+            $table->unsignedBigInteger('to_user_id');
+            $table->text('instruction');
+            $table->enum('status', ['open', 'selesai'])->default('open');
+            $table->timestamp('acted_at')->nullable();
+            $table->unsignedBigInteger('created_by');
+            $table->timestamp('created_at')->nullable();
+
+            $table->index('incoming_letter_id');
+        });
+
+        // 14. letter_links — edge runutan surat, polymorphic manual dua sisi
+        //     (document|incoming_letter), TANPA FK ke node dan TANPA relasi
+        //     Eloquent (keabsahan edge dijaga service). Hanya created_at.
+        //     Nama unique eksplisit `letter_links_edge_unique`: nama otomatis
+        //     Laravel (71 karakter) melebihi batas identifier MySQL (64).
+        $schema->create('letter_links', function (Blueprint $table) {
+            $table->uuid('id')->primary();
+            $table->enum('parent_type', ['document', 'incoming_letter']);
+            $table->uuid('parent_id');
+            $table->enum('child_type', ['document', 'incoming_letter']);
+            $table->uuid('child_id');
+            $table->enum('relation', ['balasan', 'tindak_lanjut', 'referensi']);
+            $table->unsignedBigInteger('created_by');
+            $table->timestamp('created_at')->nullable();
+
+            $table->unique(
+                ['parent_type', 'parent_id', 'child_type', 'child_id', 'relation'],
+                'letter_links_edge_unique'
+            );
+            $table->index(['child_type', 'child_id']);
         });
     }
 }
