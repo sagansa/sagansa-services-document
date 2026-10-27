@@ -48,6 +48,21 @@ class AuditLogger
     /** Surat diverifikasi via halaman publik. */
     public const EVENT_VERIFIED_PUBLIC = 'verified_public';
 
+    /** Surat masuk terdaftar (scan + agenda dicadangkan). */
+    public const EVENT_INCOMING_CREATED = 'incoming_created';
+
+    /** Data surat masuk diubah. */
+    public const EVENT_INCOMING_UPDATED = 'incoming_updated';
+
+    /** Status surat masuk naik tahap (terdaftar→diproses→selesai). */
+    public const EVENT_INCOMING_STATUS = 'incoming_status';
+
+    /** Disposisi baru ditambahkan ke surat masuk. */
+    public const EVENT_DISPOSITION_ADDED = 'disposition_added';
+
+    /** Disposisi diselesaikan oleh penerima. */
+    public const EVENT_DISPOSITION_COMPLETED = 'disposition_completed';
+
     /**
      * Catat satu baris jejak audit untuk sebuah surat.
      *

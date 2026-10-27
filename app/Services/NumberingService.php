@@ -27,6 +27,12 @@ use DateTimeInterface;
  */
 class NumberingService
 {
+    /** Code counter agenda surat masuk pada number_sequences (baris generic, fase 1). */
+    private const AGENDA_COUNTER_TYPE = 'SM';
+
+    /** Unit counter agenda surat masuk pada number_sequences. */
+    private const AGENDA_COUNTER_UNIT = 'IN';
+
     /**
      * Cadangkan nomor urut berikutnya untuk (jenis, unit, tahun).
      *
@@ -37,16 +43,64 @@ class NumberingService
      */
     public function reserve(string $letterTypeCode, string $unit, int $year): array
     {
-        $attributes = [
+        $seq = $this->nextSeq([
             'letter_type_code' => $letterTypeCode,
             'unit' => $unit,
             'year' => $year,
-        ];
+        ]);
 
+        $number = sprintf(
+            '%03d/%s/%s/%s/%d',
+            $seq,
+            $letterTypeCode,
+            $unit,
+            self::romanMonth(now()),
+            $year,
+        );
+
+        return ['seq' => $seq, 'number' => $number];
+    }
+
+    /**
+     * Cadangkan nomor AGENDA surat masuk untuk tahun $year — format
+     * berbeda dari nomor surat keluar: `SM-%03d/%s/%d`
+     * (seq, bulan romawi, tahun), contoh SM-001/X/2026.
+     *
+     * Counter agenda memakai baris number_sequences yang sama dengan
+     * nomor surat keluar (code 'SM' + unit 'IN' — kolom generic fase 1),
+     * sehingga dua register paralel diserialisasi oleh lock baris
+     * counter yang sama; unique key `agenda_number` meringkukinya.
+     *
+     * @return array{seq: int, number: string}
+     */
+    public function reserveAgenda(int $year): array
+    {
+        $seq = $this->nextSeq([
+            'letter_type_code' => self::AGENDA_COUNTER_TYPE,
+            'unit' => self::AGENDA_COUNTER_UNIT,
+            'year' => $year,
+        ]);
+
+        return [
+            'seq' => $seq,
+            'number' => sprintf('SM-%03d/%s/%d', $seq, self::romanMonth(now()), $year),
+        ];
+    }
+
+    /**
+     * Seq berikutnya untuk satu baris counter: insertOrIgnore baris →
+     * lockForUpdate → increment → baca nilai baru DI DALAM lock.
+     * Jalur bersama reserve()/reserveAgenda() (refactor fase 1b —
+     * perilaku reserve()/ensureReserved() tidak berubah).
+     *
+     * @param  array<string, mixed>  $attributes
+     */
+    private function nextSeq(array $attributes): int
+    {
         // Transaksi DIJALANKAN pada koneksi model (mysql_document), bukan
         // koneksi default — di test koneksi default adalah sqlite :memory:
         // yang tidak memiliki tabel number_sequences.
-        $seq = NumberSequence::query()->getConnection()->transaction(function () use ($attributes): int {
+        return NumberSequence::query()->getConnection()->transaction(function () use ($attributes): int {
             NumberSequence::query()->insertOrIgnore(
                 [...$attributes, 'last_seq' => 0],
             );
@@ -65,17 +119,6 @@ class NumberingService
                 ->whereKey($sequence->id)
                 ->value('last_seq');
         }, attempts: 5);
-
-        $number = sprintf(
-            '%03d/%s/%s/%s/%d',
-            $seq,
-            $letterTypeCode,
-            $unit,
-            self::romanMonth(now()),
-            $year,
-        );
-
-        return ['seq' => $seq, 'number' => $number];
     }
 
     /**
