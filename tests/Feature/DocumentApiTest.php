@@ -577,11 +577,23 @@ class DocumentApiTest extends TestCase
         $type = LetterType::factory()->create(['code' => 'ST']);
         $other = LetterType::factory()->create(['code' => 'SK']);
 
-        Document::factory()->count(20)->create(['letter_type_id' => $type->id]);
+        // Flake fix: created_at eksplisit berurutan — ordering index
+        // adalah created_at DESC, id DESC; factory real-time bisa jatuh
+        // di detik yang sama sehingga tie-break id (uuid acak) membuat
+        // posisi data.0 non-deterministik. SK dibuat LEBIH TUA agar
+        // 20 ST pasti memenuhi halaman 1.
+        $base = now();
+        Document::factory()->count(20)->sequence(
+            fn ($sequence) => [
+                'letter_type_id' => $type->id,
+                'created_at' => $base->copy()->subMinutes(10)->addSeconds($sequence->index),
+            ],
+        )->create();
         Document::factory()->count(2)->create([
             'letter_type_id' => $other->id,
             'subject' => 'Surat Khusus Klien',
             'status' => 'terbit',
+            'created_at' => $base->copy()->subHour(),
         ]);
 
         // Halaman 1: envelope + meta paginasi 15.
