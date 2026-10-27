@@ -95,12 +95,14 @@ trait CreatesDocumentSchema
         });
 
         // 2. templates — template isi surat (HTML) per jenis.
+        //     letter_type_id RESTRICT (migration 2026_10_27_000001):
+        //     jenis yang masih dipakai template tidak boleh terhapus.
         $schema->create('templates', function (Blueprint $table) {
             $table->id();
             $table->foreignId('letter_type_id')
                 ->constrained('letter_types')
                 ->cascadeOnUpdate()
-                ->cascadeOnDelete();
+                ->restrictOnDelete();
             $table->string('name');
             $table->longText('body_html');
             $table->json('placeholders')->nullable();
@@ -150,12 +152,14 @@ trait CreatesDocumentSchema
         });
 
         // 6. documents — surat itu sendiri, PK uuid.
+        //    letter_type_id RESTRICT (migration 2026_10_27_000001): jenis
+        //    yang masih dipakai surat tidak boleh terhapus (mandat arsip).
         $schema->create('documents', function (Blueprint $table) {
             $table->uuid('id')->primary();
             $table->foreignId('letter_type_id')
                 ->constrained('letter_types')
                 ->cascadeOnUpdate()
-                ->cascadeOnDelete();
+                ->restrictOnDelete();
             $table->uuid('company_id')->nullable()->index();
             // Nullable sejak migrasi 2026_10_26_000003: pra-nomor = NULL
             // (NULL bebas dari constraint unique → banyak draft sah).
@@ -227,6 +231,7 @@ trait CreatesDocumentSchema
 
         // 9. signing_requests — permintaan persetujuan penandatangan,
         //    TANPA timestamps (requested_at/acted_at cukup).
+        //    signer_id RESTRICT (migration 2026_10_27_000001).
         $schema->create('signing_requests', function (Blueprint $table) {
             $table->uuid('id')->primary();
             $table->foreignUuid('document_id')
@@ -236,7 +241,7 @@ trait CreatesDocumentSchema
             $table->foreignId('signer_id')
                 ->constrained('signers')
                 ->cascadeOnUpdate()
-                ->cascadeOnDelete();
+                ->restrictOnDelete();
             $table->enum('status', ['diminta', 'disetujui', 'ditolak'])->default('diminta');
             $table->timestamp('requested_at');
             $table->timestamp('acted_at')->nullable();
