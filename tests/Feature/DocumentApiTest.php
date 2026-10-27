@@ -464,6 +464,66 @@ class DocumentApiTest extends TestCase
     }
 
     #[Test]
+    public function show_includes_body_html_only_while_document_is_editable(): void
+    {
+        $this->signInAsSigner();
+        $type = LetterType::factory()->create(['code' => 'ST', 'name' => 'Surat Tugas']);
+
+        $draft = Document::factory()->create([
+            'letter_type_id' => $type->id,
+            'unit' => 'DIR',
+            'year' => now()->year,
+            'subject' => 'Draft yang masih diedit',
+            'body_html' => '<p>Isi draft</p>',
+            'status' => 'draft',
+        ]);
+
+        // Draft → body_html ikut (editor wizard membuka kembali isinya).
+        $this->getJson("/api/v1/documents/{$draft->id}")
+            ->assertOk()
+            ->assertJsonPath('data.body_html', '<p>Isi draft</p>');
+
+        // menunggu_ttd masih editable → tetap ikut.
+        $draft->forceFill(['status' => 'menunggu_ttd'])->save();
+        $this->getJson("/api/v1/documents/{$draft->id}")
+            ->assertOk()
+            ->assertJsonPath('data.body_html', '<p>Isi draft</p>');
+
+        // Terbit → isi lewat PDF terbitan, body_html dibuang dari payload.
+        $published = Document::factory()->create([
+            'letter_type_id' => $type->id,
+            'unit' => 'DIR',
+            'year' => now()->year,
+            'subject' => 'Sudah terbit',
+            'body_html' => '<p>Isi terbit</p>',
+            'status' => 'terbit',
+        ]);
+        $this->getJson("/api/v1/documents/{$published->id}")
+            ->assertOk()
+            ->assertJsonMissing(['body_html']);
+    }
+
+    #[Test]
+    public function index_omits_body_html_for_drafts_to_keep_list_payload_lean(): void
+    {
+        $this->signInAsSigner();
+        $type = LetterType::factory()->create(['code' => 'ST', 'name' => 'Surat Tugas']);
+
+        Document::factory()->create([
+            'letter_type_id' => $type->id,
+            'unit' => 'DIR',
+            'year' => now()->year,
+            'subject' => 'Draft di daftar',
+            'body_html' => '<p>Isi panjang</p>',
+            'status' => 'draft',
+        ]);
+
+        $this->getJson('/api/v1/documents')
+            ->assertOk()
+            ->assertJsonMissing(['body_html']);
+    }
+
+    #[Test]
     public function me_signer_lists_active_roles_for_current_user(): void
     {
         Sanctum::actingAs($this->user);

@@ -35,6 +35,18 @@ class DocumentResource extends JsonResource
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
 
+            // Isi surat HANYA ikut bentuk detail (marker: relasi issuances
+            // di-eager-load endpoint show) dan hanya selagi masih editable —
+            // editor mobile (wizard/jawab gap Task 20) membutuhkannya untuk
+            // membuka kembali draft/menunggu_ttd. Surat terbit/dicabut/
+            // dibatalkan menampilkan isi lewat PDF terbitan (endpoint verify),
+            // jadi body_html TIDAK disertakan supaya payload tetap ramping.
+            'body_html' => $this->when(
+                $this->resource->relationLoaded('issuances')
+                    && in_array($this->resource->status, ['draft', 'menunggu_ttd'], true),
+                fn () => $this->body_html,
+            ),
+
             // ——— bentuk detail (whenLoaded) ———
             'active_issuance' => $this->whenLoaded('activeIssuance', fn () => $this->activeIssuance !== null ? [
                 'id' => $this->activeIssuance->id,
