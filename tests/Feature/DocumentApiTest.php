@@ -447,6 +447,9 @@ class DocumentApiTest extends TestCase
         $this->assertNotNull($data['active_issuance']['finalized_at']);
         $this->assertCount(1, $data['issuances']);
         $this->assertSame($issuance->id, $data['issuances'][0]['id']);
+        // Note reissue (alasan terbitkan ulang) ikut bentuk issuances —
+        // riwayat penerbitan mobile menampilkannya (task 22).
+        $this->assertArrayHasKey('note', $data['issuances'][0]);
 
         $this->assertCount(1, $data['attachments']);
         $this->assertSame($attachment->id, $data['attachments'][0]['id']);

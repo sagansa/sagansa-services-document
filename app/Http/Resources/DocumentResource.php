@@ -68,6 +68,7 @@ class DocumentResource extends JsonResource
                 'method' => $issuance->method,
                 'method_label' => $issuance->method_label,
                 'file_sha256' => $issuance->file_sha256,
+                'note' => $issuance->note,
                 'is_active' => $issuance->is_active,
                 'replaced_by_id' => $issuance->replaced_by_id,
                 'finalized_at' => $issuance->finalized_at?->toIso8601String(),
