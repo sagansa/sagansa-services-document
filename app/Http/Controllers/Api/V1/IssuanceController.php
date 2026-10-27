@@ -13,6 +13,7 @@ use App\Services\Finalizer;
 use App\Services\ImageToPdfComposer;
 use App\Services\PdfRenderer;
 use App\Services\PdfStamper;
+use App\Services\PreFinalGarbageCollector;
 use App\Services\QrBuilder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -73,6 +74,7 @@ class IssuanceController extends Controller
         private readonly QrBuilder $qrBuilder = new QrBuilder,
         private readonly ImageToPdfComposer $composer = new ImageToPdfComposer,
         private readonly AuditLogger $audit = new AuditLogger,
+        private readonly PreFinalGarbageCollector $preFinalGc = new PreFinalGarbageCollector,
     ) {}
 
     // ——— pra-final ———
@@ -118,6 +120,11 @@ class IssuanceController extends Controller
         if (Storage::disk('local')->put($path, $bytes) === false) {
             throw new RuntimeException("Gagal menulis berkas pra-final ke disk local: {$path}.");
         }
+
+        // Menulis pra-final baru = momen sapu sisa URL kedaluwarsa yang
+        // tidak pernah diunduh (utang GC Task 16) — berumur > TTL dihapus
+        // diam-diam; berkas yang baru ditulis selamat (mtime segar).
+        $this->preFinalGc->sweep();
 
         $this->audit->log(
             $document,

@@ -167,6 +167,33 @@ class IssuanceApiTest extends TestCase
             ->assertJsonPath('error.code', 'DOCUMENT_LOCKED');
     }
 
+    #[Test]
+    public function pre_final_sweeps_expired_leftover_files_but_keeps_fresh_and_current(): void
+    {
+        // Utang GC Task 16 (MUST-FIX Task 23): URL pra-final kedaluwarsa
+        // yang tidak pernah diunduh meninggalkan berkas temp selamanya.
+        // Menulis pra-final baru harus menyapu berkas berumur > TTL 15
+        // menit, TANPA menyentuh berkas muda & berkas yang baru ditulis.
+        $document = $this->draftFor($this->creator);
+        $disk = Storage::disk('local');
+
+        $oldPath = sprintf('pre-final/%s-%d.pdf', $document->id, now()->getTimestamp() - 1200);
+        $freshPath = sprintf('pre-final/%s-%d.pdf', '00000000-0000-0000-0000-000000000000', now()->getTimestamp());
+        $disk->put($oldPath, 'sisa url kedaluwarsa');
+        $disk->put($freshPath, 'masih dalam jendela unduh');
+        // Fake disk menulis mtime "sekarang" — jadwalkan ulang mtime berkas
+        // tua ke 20 menit lalu via touch pada path riil.
+        $this->assertTrue(touch($disk->path($oldPath), now()->getTimestamp() - 1200));
+
+        $this->postJson("/api/v1/documents/{$document->id}/pre-final", ['mode' => 'a'])
+            ->assertOk();
+
+        $remaining = $disk->files('pre-final');
+        $this->assertNotContains($oldPath, $remaining, 'berkas pra-final berumur > 15 menit harus tersapu');
+        $this->assertContains($freshPath, $remaining, 'berkas muda milik dokumen lain harus tetap ada');
+        $this->assertSame(2, count($remaining), 'harus tersisa: berkas muda + berkas pra-final yang baru ditulis');
+    }
+
     // ——— finalize ———
 
     #[Test]
