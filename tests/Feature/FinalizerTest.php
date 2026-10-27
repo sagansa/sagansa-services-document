@@ -269,6 +269,36 @@ class FinalizerTest extends TestCase
     }
 
     /**
+     * Fix C1 — metode a: nomor dicadangkan SEBELUM render sehingga
+     * benar-benar tercetak di PDF terbitan (dulu reserve terjadi di
+     * persist SETELAH bytes jadi → number null saat render).
+     */
+    #[Test]
+    public function finalize_from_content_prints_reserved_number_inside_pdf_bytes(): void
+    {
+        // Pra-nomor: NULL (bukan '') — bentuk lahir dari DocumentController.
+        $document = $this->makeLetter(['number' => null, 'seq' => 0]);
+
+        $issuance = $this->finalizer->finalizeFromContent($document, 77);
+
+        $fresh = $document->fresh();
+        $this->assertMatchesRegularExpression(
+            '/^\d{3}\/ST\/DIR\/[IVX]+\/'.$document->year.'$/',
+            $fresh->number,
+            'surat harus bernomor setelah finalize',
+        );
+
+        // Bytes di disk memuat nomor yang sama (content stream di-inflate,
+        // pola PdfRendererTest — font base-14 terbaca literal).
+        $stored = (string) Storage::disk('documents')->get($issuance->file_path);
+        $this->assertStringContainsString(
+            $fresh->number,
+            $this->decodedStreams($stored),
+            'nomor surat harus tercetak di PDF metode a',
+        );
+    }
+
+    /**
      * Dokumen surat standar: kode jenis 'ST', unit 'DIR', tahun berjalan,
      * body sederhana — nomor dari factory (sudah terisi) kecuali diubah.
      *
@@ -283,5 +313,22 @@ class FinalizerTest extends TestCase
             'subject' => 'Surat Kuasa Pengangkatan',
             'body_html' => '<p>Dengan hormat,</p>',
         ]);
+    }
+
+    /**
+     * Gabungan seluruh content stream PDF setelah dekompresi zlib
+     * (pola PdfRendererTest::decodedStreams).
+     */
+    private function decodedStreams(string $pdf): string
+    {
+        preg_match_all('/stream\r?\n(.*?)\r?\nendstream/s', $pdf, $matches);
+
+        $decoded = '';
+        foreach ($matches[1] as $chunk) {
+            $uncompressed = @gzuncompress($chunk);
+            $decoded .= $uncompressed === false ? $chunk : $uncompressed;
+        }
+
+        return $decoded;
     }
 }

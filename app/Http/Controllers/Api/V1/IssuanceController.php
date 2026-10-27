@@ -11,6 +11,7 @@ use App\Models\Issuance;
 use App\Services\AuditLogger;
 use App\Services\Finalizer;
 use App\Services\ImageToPdfComposer;
+use App\Services\NumberingService;
 use App\Services\PdfRenderer;
 use App\Services\PdfStamper;
 use App\Services\PreFinalGarbageCollector;
@@ -67,6 +68,12 @@ class IssuanceController extends Controller
 
     private const DEFAULT_QR_WIDTH_MM = 25.0;
 
+    /** Jarak teks nomor di atas QR default (mm). */
+    private const NUMBER_TEXT_GAP_MM = 2.0;
+
+    /** Font size teks nomor di atas QR default (pt). */
+    private const NUMBER_TEXT_FONT_SIZE = 8.0;
+
     public function __construct(
         private readonly Finalizer $finalizer = new Finalizer,
         private readonly PdfRenderer $renderer = new PdfRenderer,
@@ -75,6 +82,7 @@ class IssuanceController extends Controller
         private readonly ImageToPdfComposer $composer = new ImageToPdfComposer,
         private readonly AuditLogger $audit = new AuditLogger,
         private readonly PreFinalGarbageCollector $preFinalGc = new PreFinalGarbageCollector,
+        private readonly NumberingService $numbering = new NumberingService,
     ) {}
 
     // ——— pra-final ———
@@ -108,6 +116,13 @@ class IssuanceController extends Controller
                 "Pra-final hanya bisa untuk draft|menunggu_ttd; surat ini berstatus '{$document->status}'.",
             );
         }
+
+        // Nomor WAJIB sudah terisi saat pra-final kedua mode (Fix C1):
+        // mode a mencetak number di kepala surat, mode b overlay default
+        // menempel teks nomor di atas QR. Idempoten (sudah bernomor →
+        // no-op); refresh agar render/stamp memakai nomor terbaru.
+        $this->numbering->ensureReserved($document);
+        $document->refresh();
 
         $bytes = $validated['mode'] === 'a'
             ? $this->renderer->render($document)
@@ -214,6 +229,15 @@ class IssuanceController extends Controller
             throw new AlreadySignedException(
                 'Metode c (ttd_elektronik_resmi) tidak boleh menyertakan overlay; gunakan metode b untuk penempelan QR.',
             );
+        }
+
+        // Metode a/b memproduksi bytes yang MENCETAK nomor (render blade /
+        // overlay teks default) — overlay default dibangun di match bawah
+        // dari $document ini, jadi nomor harus terisi dulu (Fix C1).
+        // Idempoten; Finalizer juga memastikan lagi di dalamnya.
+        if (in_array($validated['method'], ['a', 'b'], true)) {
+            $this->numbering->ensureReserved($document);
+            $document->refresh();
         }
 
         $issuance = match ($validated['method']) {
@@ -458,23 +482,39 @@ class IssuanceController extends Controller
     }
 
     /**
-     * Normalisasi overlay request → kontrak PdfStamper (image binary).
-     * Bila tidak ada overlay sama sekali → satu overlay QR default
-     * (page 1, x_mm 165, y_mm 15, width_mm 25).
+     * Normalisasi overlay request → kontrak PdfStamper (image binary /
+     * text). Bila tidak ada overlay sama sekali → overlay QR default
+     * (page 1, x_mm 165, y_mm 15, width_mm 25) + TEKS `No. {number}`
+     * tepat di atas QR (Fix C1 — nomor tercetak juga di dokumen eksternal
+     * mode b; QR persegi → tinggi = lebar).
      *
      * @param  list<array<string, mixed>>|null  $overlays
-     * @return list<array{image: string, page: int, x_mm: float, y_mm: float, width_mm: float}>
+     * @return list<array<string, mixed>>
      */
     private function overlaysOrDefault(?array $overlays, Document $document): array
     {
         if ($overlays === null || $overlays === []) {
-            return [[
+            $default = [[
                 'image' => $this->qrBuilder->build($document->id),
                 'page' => self::DEFAULT_QR_PAGE,
                 'x_mm' => self::DEFAULT_QR_X_MM,
                 'y_mm' => self::DEFAULT_QR_Y_MM,
                 'width_mm' => self::DEFAULT_QR_WIDTH_MM,
             ]];
+
+            $number = $document->number;
+            if ($number !== null && $number !== '') {
+                $default[] = [
+                    'text' => 'No. '.$number,
+                    'page' => self::DEFAULT_QR_PAGE,
+                    'x_mm' => self::DEFAULT_QR_X_MM,
+                    'y_mm' => self::DEFAULT_QR_Y_MM + self::DEFAULT_QR_WIDTH_MM + self::NUMBER_TEXT_GAP_MM,
+                    'width_mm' => self::DEFAULT_QR_WIDTH_MM,
+                    'font_size' => self::NUMBER_TEXT_FONT_SIZE,
+                ];
+            }
+
+            return $default;
         }
 
         return array_map(function (array $overlay) use ($document): array {

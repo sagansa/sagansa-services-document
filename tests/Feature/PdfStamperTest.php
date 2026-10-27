@@ -112,6 +112,39 @@ class PdfStamperTest extends TestCase
         $this->assertEqualsWithDelta(10.0 * 72 / 25.4, $yPt, 0.2, 'y 10mm dari BAWAH halaman (origin kiri-bawah)');
     }
 
+    /**
+     * Overlay teks (Fix C1): "No. 001/ST/DIR/X/2026" 8pt rata tengah —
+     * operator `BT /F1 8.00 Tf ... (No. ...) Tj ET` di content stream.
+     */
+    public function test_stamp_draws_text_overlay_on_requested_page(): void
+    {
+        $out = $this->stamper->stamp($this->pdf14, [
+            ['text' => 'No. 001/ST/DIR/X/2026', 'page' => 1, 'x_mm' => 165.0, 'y_mm' => 42.0, 'width_mm' => 25.0, 'font_size' => 8],
+            $this->overlay(2),
+        ]);
+
+        $contents = $this->pageContentStreams($out);
+
+        $this->assertStringContainsString('No. 001/ST/DIR/X/2026', $contents[0], 'teks nomor harus tergambar di halaman 1');
+        $this->assertStringContainsString('/F1 8.00 Tf', $contents[0], 'font size 8pt harus dipakai');
+        $this->assertStringNotContainsString('No. 001/ST/DIR/X/2026', $contents[1], 'teks hanya di halaman yang diminta');
+        $this->assertMatchesRegularExpression('#/I\d+ Do#', $contents[1], 'overlay image di halaman 2 tetap tergambar');
+    }
+
+    public function test_stamp_rejects_overlay_without_image_or_text_key(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        $this->stamper->stamp($this->pdf14, [['page' => 1, 'x_mm' => 10, 'y_mm' => 10, 'width_mm' => 20]]);
+    }
+
+    public function test_stamp_rejects_blank_text_overlay(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+
+        $this->stamper->stamp($this->pdf14, [['text' => '  ', 'page' => 1, 'x_mm' => 10, 'y_mm' => 10, 'width_mm' => 20]]);
+    }
+
     public function test_stamp_rejects_overlay_for_missing_page(): void
     {
         $this->expectException(\InvalidArgumentException::class);

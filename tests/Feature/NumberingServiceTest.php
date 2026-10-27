@@ -2,6 +2,8 @@
 
 namespace Tests\Feature;
 
+use App\Models\Document;
+use App\Models\LetterType;
 use App\Services\NumberingService;
 use Carbon\Carbon;
 use Symfony\Component\Process\Process;
@@ -75,6 +77,43 @@ class NumberingServiceTest extends TestCase
         $this->assertSame('001/ST/KEU/X/2026', $keu['number']);
         $this->assertSame('002/ST/DIR/X/2026', $dirAgain['number']);
         $this->assertDatabaseCount('number_sequences', 2, 'mysql_document');
+    }
+
+    /**
+     * Fix C1 — ensureReserved(): cadangkan nomor untuk surat pra-nomor;
+     * IDEMPOTEN: panggilan kedua tidak memajukan counter / mengganti
+     * nomor (pra-final lalu finalize boleh memanggil berkali-kali).
+     */
+    public function test_ensure_reserved_fills_number_and_is_idempotent(): void
+    {
+        $type = LetterType::factory()->create(['code' => 'ST']);
+        $document = Document::factory()->create([
+            'letter_type_id' => $type->id,
+            'number' => null,
+            'seq' => 0,
+            'unit' => 'DIR',
+            'year' => 2026,
+        ]);
+
+        $this->service->ensureReserved($document);
+
+        $first = $document->fresh();
+        $this->assertSame('001/ST/DIR/X/2026', $first->number);
+        $this->assertSame(1, $first->seq);
+
+        // Panggilan kedua: no-op — counter TIDAK maju, nomor tetap.
+        $this->service->ensureReserved($first);
+        $this->service->ensureReserved($document);
+
+        $second = $document->fresh();
+        $this->assertSame('001/ST/DIR/X/2026', $second->number, 'nomor tidak boleh berubah');
+        $this->assertSame(1, $second->seq, 'seq tidak boleh maju pada panggilan ulang');
+        $this->assertDatabaseHas('number_sequences', [
+            'letter_type_code' => 'ST',
+            'unit' => 'DIR',
+            'year' => 2026,
+            'last_seq' => 1,
+        ], 'mysql_document');
     }
 
     /**

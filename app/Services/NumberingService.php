@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Document;
 use App\Models\NumberSequence;
 use DateTimeInterface;
 
@@ -75,6 +76,39 @@ class NumberingService
         );
 
         return ['seq' => $seq, 'number' => $number];
+    }
+
+    /**
+     * Pastikan surat SUDAH bernomor — dipanggil sebelum bytes PDF
+     * diproduksi (render/stamp) supaya nomor benar-benar tercetak di
+     * berkas (Fix C1: dulu reserve terjadi di persist SETELAH bytes
+     * jadi, sehingga metode a merender number null).
+     *
+     * Transaksi + lockForUpdate re-read baris surat: bila `number`
+     * masih null/'' → reserve lewat reserve() lalu simpan number+seq.
+     * IDEMPOTEN: nomor sudah terisi → no-op (counter tidak maju), aman
+     * dipanggil berkali-kali (mis. pra-final lalu finalize).
+     */
+    public function ensureReserved(Document $doc): void
+    {
+        Document::query()->getConnection()->transaction(function () use ($doc): void {
+            /** @var Document $locked */
+            $locked = Document::query()->whereKey($doc->id)->lockForUpdate()->firstOrFail();
+
+            if ($locked->number !== null && $locked->number !== '') {
+                return;
+            }
+
+            ['seq' => $seq, 'number' => $number] = $this->reserve(
+                $locked->letterType()->firstOrFail()->code,
+                $locked->unit,
+                $locked->year,
+            );
+
+            $locked->number = $number;
+            $locked->seq = $seq;
+            $locked->save();
+        }, attempts: 5);
     }
 
     /**

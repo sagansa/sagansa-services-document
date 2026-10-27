@@ -75,6 +75,11 @@ class Finalizer
      */
     public function finalizeFromContent(Document $doc, ?int $actorId = null): Issuance
     {
+        // Nomor WAJIB terisi SEBELUM render — nomor surat tercetak di
+        // PDF metode a (Fix C1). $doc di-refresh agar render memakai
+        // nomor yang baru saja dicadangkan.
+        $this->ensureNumber($doc);
+
         return $this->persist(
             $doc, 'a', $this->renderer->render($doc), actorId: $actorId,
         );
@@ -83,11 +88,17 @@ class Finalizer
     /**
      * Mode B — tempel overlay (QR tanda tangan) ke PDF pra-final lalu terbitkan.
      *
-     * @param  list<array{image: string, page: int, x_mm: float, y_mm: float, width_mm: float}>  $overlays
+     * @param  list<array{image: string, page: int, x_mm: float, y_mm: float, width_mm: float}|array{text: string, page: int, x_mm: float, y_mm: float, width_mm: float, font_size?: float}>  $overlays
      * @param  int|null  $actorId  user pelaku; null = auth()->id()
      */
     public function finalizeFromStamps(Document $doc, string $pdfBytes, array $overlays, ?int $actorId = null): Issuance
     {
+        // Overlay default (QR + teks nomor) dibangun controller SEBELUM
+        // method ini dipanggil — controller wajib ensureReserved duluan;
+        // panggilan ini idempoten dan menjaga kontrak nomor-terisi
+        // bagi pemanggil langsung (non-controller).
+        $this->ensureNumber($doc);
+
         return $this->persist(
             $doc, 'b', $this->stamper->stamp($pdfBytes, $overlays), actorId: $actorId,
         );
@@ -117,6 +128,11 @@ class Finalizer
             throw new PdfInvalidException('Berkas unggahan bukan PDF (magic byte %PDF tidak ada).');
         }
 
+        // Nomor tidak tercetak di berkas unggahan (file pihak luar),
+        // tapi dipastikan terisi pra-persist supaya identitas surat
+        // (DB + response) selalu bernomor saat terbit.
+        $this->ensureNumber($doc);
+
         return $this->persist($doc, $method, $pdfBytes, actorId: $actorId);
     }
 
@@ -143,9 +159,26 @@ class Finalizer
             throw new InvalidArgumentException('Reissue wajib menyertakan note alasan (tidak boleh kosong).');
         }
 
+        // SEBELUM bytesProducer dieksekusi: bytesProducer metode a/b
+        // merender nomor (blade / overlay teks default) — $doc adalah
+        // instance yang sama dengan yang ditangkap closure controller,
+        // jadi refresh di sini terlihat oleh producer. Nomor reissue
+        // memang sudah ada (status terbit) → no-op idempoten.
+        $this->ensureNumber($doc);
+
         return $this->persist(
             $doc, $method, $bytesProducer(), reissue: true, note: $note, actorId: $actorId,
         );
+    }
+
+    /**
+     * Pastikan surat bernomor lalu muat ulang model dari DB agar
+     * pemanggil (render/stamp/bytesProducer) melihat `number` terbaru.
+     */
+    private function ensureNumber(Document $doc): void
+    {
+        $this->numbering->ensureReserved($doc);
+        $doc->refresh();
     }
 
     /**

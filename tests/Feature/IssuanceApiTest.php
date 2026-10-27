@@ -132,6 +132,72 @@ class IssuanceApiTest extends TestCase
         $this->assertSame('b', $log->payload['mode']);
     }
 
+    /**
+     * Fix C1 — pra-final mode b tanpa overlay custom: nomor sudah
+     * direserve pra-render dan TEKS `No. {number}` tercetak di atas
+     * posisi QR default.
+     */
+    #[Test]
+    public function pre_final_mode_b_default_overlay_prints_number_text_above_qr(): void
+    {
+        $document = $this->draftFor($this->creator); // number null pra-reserve
+
+        $response = $this->postJson("/api/v1/documents/{$document->id}/pre-final", [
+            'mode' => 'b',
+            'pdf_base64' => $this->fixturePdfBase64(),
+        ]);
+
+        $response->assertOk();
+
+        // Nomor terisi saat pra-final (bukan menunggu finalize).
+        $number = $document->fresh()->number;
+        $this->assertNotNull($number, 'nomor harus tercadangkan saat pra-final');
+        $this->assertSame($number, Document::query()->findOrFail($document->id)->number);
+
+        $download = $this->get($response->json('data.download_url'));
+        $download->assertOk();
+
+        $decoded = $this->decodedStreams($download->streamedContent());
+        $this->assertStringContainsString('No. '.$number, $decoded, 'teks nomor harus tercetak di atas QR default');
+    }
+
+    /**
+     * Fix C1 — finalize mode b dengan overlay default: issuance aktif,
+     * nomor konsisten DB ↔ response ↔ PDF terbitan.
+     */
+    #[Test]
+    public function finalize_mode_b_default_overlay_keeps_number_consistent_db_and_pdf(): void
+    {
+        $document = $this->draftFor($this->creator);
+
+        $response = $this->postJson("/api/v1/documents/{$document->id}/finalize", [
+            'method' => 'b',
+            'pdf_base64' => $this->fixturePdfBase64(),
+        ]);
+
+        $response->assertCreated();
+
+        $number = $document->fresh()->number;
+        $this->assertNotNull($number);
+        $this->assertSame($number, $response->json('data.number'), 'response memakai nomor DB');
+        $this->assertSame('terbit', $document->fresh()->status);
+
+        $issuance = Issuance::query()
+            ->where('document_id', $document->id)
+            ->where('is_active', true)
+            ->firstOrFail();
+        $this->assertSame($issuance->id, $response->json('data.issuance.id'));
+
+        // PDF terbitan memuat teks nomor yang sama (content stream FPDF
+        // di-inflate — font core Helvetica terbaca literal).
+        $stored = (string) Storage::disk('documents')->get($issuance->file_path);
+        $this->assertStringContainsString(
+            'No. '.$number,
+            $this->decodedStreams($stored),
+            'PDF terbitan harus memuat teks nomor sama dengan DB',
+        );
+    }
+
     #[Test]
     public function pre_final_mode_b_without_pdf_returns_422(): void
     {
@@ -520,6 +586,24 @@ class IssuanceApiTest extends TestCase
         return base64_encode(
             (string) file_get_contents(dirname(__DIR__).'/fixtures/sample_pdf14.pdf'),
         );
+    }
+
+    /**
+     * Gabungan seluruh content stream PDF setelah dekompresi zlib
+     * (dompdf CPDF & FPDF sama-sama menulis stream FlateDecode; string
+     * literal font core terbaca setelah inflate).
+     */
+    private function decodedStreams(string $pdf): string
+    {
+        preg_match_all('/stream\r?\n(.*?)\r?\nendstream/s', $pdf, $matches);
+
+        $decoded = '';
+        foreach ($matches[1] as $chunk) {
+            $uncompressed = @gzuncompress($chunk);
+            $decoded .= $uncompressed === false ? $chunk : $uncompressed;
+        }
+
+        return $decoded;
     }
 
     /**

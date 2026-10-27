@@ -9,15 +9,24 @@ use setasign\Fpdi\FpdiException;
 use Symfony\Component\Process\Process;
 
 /**
- * Penempel overlay gambar (PNG QR tanda tangan) ke PDF existing —
- * Mode B/C pra-final.
+ * Penempel overlay ke PDF existing — Mode B/C pra-final.
  *
- * Overlay item:
- * ['image' => binary PNG, 'page' => int 1-based, 'x_mm' => float,
- *  'y_mm' => float, 'width_mm' => float]
+ * Dua bentuk overlay (dipilih dari kunci yang ada):
+ *
+ *   image (PNG, mis. QR tanda tangan):
+ *   ['image' => binary PNG, 'page' => int 1-based, 'x_mm' => float,
+ *    'y_mm' => float, 'width_mm' => float]
+ *   Tinggi tampilan mengikuti rasio piksel PNG.
+ *
+ *   text (mis. "No. 001/ST/DIR/X/2026" di atas QR default — Fix C1):
+ *   ['text' => string, 'page' => int 1-based, 'x_mm' => float,
+ *    'y_mm' => float, 'width_mm' => float, 'font_size' => float]
+ *   Helvetica core font (tanpa embed tambahan), rata tengah dalam
+ *   lebar; font_size dalam POINT (default 8).
+ *
  * Koordinat dalam mm, origin KIRI-BAWAH halaman; y_mm adalah jarak tepi
- * bawah gambar dari tepi bawah halaman. Tinggi tampilan mengikuti rasio
- * piksel PNG.
+ * BAWAH overlay (tepi bawah gambar / tepi bawah sel teks) dari tepi
+ * bawah halaman.
  *
  * PDF sumber >1.4 yang memakai xref stream / object stream tidak terbaca
  * parser gratis FPDI — bila parsing gagal, dokumen dinormalisasi dulu
@@ -26,9 +35,12 @@ use Symfony\Component\Process\Process;
  */
 class PdfStamper
 {
+    /** Font size default overlay teks (pt). */
+    private const DEFAULT_TEXT_FONT_SIZE = 8.0;
+
     /**
      * @param  string  $pdfBytes  binary PDF sumber
-     * @param  list<array{image: string, page: int, x_mm: float, y_mm: float, width_mm: float}>  $overlays
+     * @param  list<array<string, mixed>>  $overlays  overlay image/text (lihat docblock kelas)
      * @return string binary PDF hasil (overlay tertanam, jumlah halaman tetap)
      *
      * @throws InvalidArgumentException overlay tidak lengkap / halaman di luar jangkauan / bukan PNG
@@ -50,16 +62,36 @@ class PdfStamper
     /**
      * Validasi overlay dan kelompokkan per halaman target.
      *
-     * @return array<int, list<array{image: string, page: int, x_mm: float, y_mm: float, width_mm: float}>>
+     * @param  list<array<string, mixed>>  $overlays
+     * @return array<int, list<array<string, mixed>>>
      */
     private function groupOverlaysByPage(array $overlays): array
     {
         $byPage = [];
         foreach ($overlays as $overlay) {
-            foreach (['image', 'page', 'x_mm', 'y_mm', 'width_mm'] as $key) {
+            $isImage = array_key_exists('image', $overlay);
+            $isText = ! $isImage && array_key_exists('text', $overlay);
+
+            if (! $isImage && ! $isText) {
+                throw new InvalidArgumentException(
+                    "Overlay wajib memiliki kunci 'image' (PNG) atau 'text' (teks).",
+                );
+            }
+
+            foreach (['image', 'text', 'page', 'x_mm', 'y_mm', 'width_mm'] as $key) {
+                if ($key === 'image' && ! $isImage) {
+                    continue;
+                }
+                if ($key === 'text' && ! $isText) {
+                    continue;
+                }
                 if (! array_key_exists($key, $overlay)) {
                     throw new InvalidArgumentException("Overlay wajib memiliki kunci '{$key}'.");
                 }
+            }
+
+            if ($isText && (! is_string($overlay['text']) || trim($overlay['text']) === '')) {
+                throw new InvalidArgumentException("Overlay 'text' harus berupa teks tidak kosong.");
             }
 
             $page = (int) $overlay['page'];
@@ -74,7 +106,7 @@ class PdfStamper
     }
 
     /**
-     * @param  array<int, list<array{image: string, page: int, x_mm: float, y_mm: float, width_mm: float}>>  $overlaysByPage
+     * @param  array<int, list<array<string, mixed>>>  $overlaysByPage
      */
     private function stampWithFpdi(string $pdfBytes, array $overlaysByPage): string
     {
@@ -101,6 +133,11 @@ class PdfStamper
                 $fpdi->useTemplate($templateId);
 
                 foreach ($overlaysByPage[$pageNo] ?? [] as $overlay) {
+                    if (array_key_exists('text', $overlay)) {
+                        $this->drawTextOverlay($fpdi, $overlay, (float) $size['height']);
+                        continue;
+                    }
+
                     // Kontrak kiri-bawah → FPDF top-left: tepi atas gambar =
                     // tinggi halaman - y_mm - tinggi tampilan gambar.
                     $fpdi->Image(
@@ -124,10 +161,29 @@ class PdfStamper
     }
 
     /**
-     * Tulis PDF sumber dan tiap PNG overlay (dedup by sha1) ke temp file —
-     * FPDI/FPDF membutuhkan path file, bukan bytes.
+     * Gambar overlay teks: Helvetica (core font, tanpa embed tambahan),
+     * rata tengah dalam width_mm; font_size pt → tinggi sel mm.
+     * Kontrak kiri-bawah: y_mm = jarak tepi bawah sel teks dari tepi
+     * bawah halaman (konsisten dengan overlay image).
      *
-     * @param  array<int, list<array{image: string, page: int, x_mm: float, y_mm: float, width_mm: float}>>  $overlaysByPage
+     * @param  array<string, mixed>  $overlay
+     */
+    private function drawTextOverlay(Fpdi $fpdi, array $overlay, float $pageHeightMm): void
+    {
+        $fontSize = (float) ($overlay['font_size'] ?? self::DEFAULT_TEXT_FONT_SIZE);
+        $cellHeight = $fontSize * 25.4 / 72;
+
+        $fpdi->SetFont('Helvetica', '', $fontSize);
+        $fpdi->SetXY((float) $overlay['x_mm'], $pageHeightMm - (float) $overlay['y_mm'] - $cellHeight);
+        $fpdi->Cell((float) $overlay['width_mm'], $cellHeight, (string) $overlay['text'], 0, 0, 'C');
+    }
+
+    /**
+     * Tulis PDF sumber dan tiap PNG overlay (dedup by sha1) ke temp file —
+     * FPDI/FPDF membutuhkan path file, bukan bytes. Overlay teks tidak
+     * butuh berkas temp.
+     *
+     * @param  array<int, list<array<string, mixed>>>  $overlaysByPage
      * @return array{0: string, 1: array<string, string>} path sumber + map sha1→path PNG
      */
     private function writeTempSource(string $pdfBytes, array $overlaysByPage): array
@@ -137,6 +193,10 @@ class PdfStamper
         $imagePaths = [];
         foreach ($overlaysByPage as $overlays) {
             foreach ($overlays as $overlay) {
+                if (! array_key_exists('image', $overlay)) {
+                    continue;
+                }
+
                 $hash = sha1($overlay['image']);
                 $imagePaths[$hash] ??= $this->writeTempFile($overlay['image']);
             }
