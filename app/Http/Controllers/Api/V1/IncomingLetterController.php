@@ -9,6 +9,7 @@ use App\Models\IncomingLetter;
 use App\Models\LetterLink;
 use App\Models\Party;
 use App\Services\IncomingLetterService;
+use App\Services\LetterLinkService;
 use App\Services\ThreadBuilder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -34,6 +35,7 @@ class IncomingLetterController extends Controller
     public function __construct(
         private readonly IncomingLetterService $service = new IncomingLetterService,
         private readonly ThreadBuilder $threads = new ThreadBuilder,
+        private readonly LetterLinkService $links = new LetterLinkService,
     ) {}
 
     /**
@@ -94,6 +96,12 @@ class IncomingLetterController extends Controller
      * sekaligus → 422 SCAN_INVALID. `scan` gambar tunggal diperlakukan
      * sebagai foto satu halaman (kind 'images') — hanya `scan` PDF yang
      * lewat jalur kind 'pdf'.
+     *
+     * `in_reply_to {type,id,relation}` (Task 9 fase 1b, shape sama dengan
+     * POST /documents): tautkan surat masuk baru sebagai child surat induk
+     * (mis. balasan pihak luar atas surat keluar). Keberadaan induk
+     * dipreflight SEBELUM register (ghost → 422 LINK_TARGET_NOT_FOUND,
+     * tanpa surat yatim); edge ditulis service DALAM transaksi register.
      */
     public function store(Request $request): JsonResponse
     {
@@ -103,6 +111,10 @@ class IncomingLetterController extends Controller
                 'scan' => ['nullable', 'file', 'mimes:pdf,jpg,jpeg,png', 'max:20480'],
                 'scan_images' => ['nullable', 'array', 'min:1'],
                 'scan_images.*' => ['file', 'mimes:jpg,jpeg,png', 'max:20480'],
+                'in_reply_to' => ['nullable', 'array:type,id,relation'],
+                'in_reply_to.type' => ['required_with:in_reply_to', 'string', Rule::in(['document', 'incoming_letter'])],
+                'in_reply_to.id' => ['required_with:in_reply_to', 'uuid'],
+                'in_reply_to.relation' => ['required_with:in_reply_to', 'string', Rule::in(['balasan', 'tindak_lanjut', 'referensi'])],
             ],
             $this->messages(),
             $this->fieldNames(),
@@ -139,9 +151,24 @@ class IncomingLetterController extends Controller
             );
         }
 
-        $data = collect($validated)->except(['scan', 'scan_images'])->all();
+        $inReplyTo = $validated['in_reply_to'] ?? null;
 
-        $letter = $this->service->register($data, $scanBytes, $kind, $imageBytes, (int) $request->user()->id);
+        // Preflight keberadaan induk SEBELUM registrasi — kasus tolak paling
+        // umum (ghost) gagal sebelum agenda dicadangkan / scan ditulis.
+        if ($inReplyTo !== null) {
+            $this->links->assertNodeExists($inReplyTo['type'], $inReplyTo['id']);
+        }
+
+        $data = collect($validated)->except(['scan', 'scan_images', 'in_reply_to'])->all();
+
+        $letter = $this->service->register(
+            $data,
+            $scanBytes,
+            $kind,
+            $imageBytes,
+            (int) $request->user()->id,
+            inReplyTo: $inReplyTo,
+        );
 
         // Kolom default DB (classification 'umum') tidak terisi pada model
         // in-memory jalur service — refresh agar response jujur terhadap
@@ -337,6 +364,13 @@ class IncomingLetterController extends Controller
             'min.array' => ':attribute minimal berisi :min berkas.',
             'min.integer' => ':attribute minimal :min.',
             'max.integer' => ':attribute tidak boleh lebih dari :max.',
+            'in_reply_to.array' => 'in_reply_to harus berupa objek dengan kunci type, id, dan relation.',
+            'in_reply_to.type.required_with' => 'Tipe surat induk wajib diisi bila in_reply_to dikirim.',
+            'in_reply_to.type.in' => 'Tipe surat induk harus salah satu dari: :values.',
+            'in_reply_to.id.required_with' => 'Id surat induk wajib diisi bila in_reply_to dikirim.',
+            'in_reply_to.id.uuid' => 'Id surat induk harus berupa UUID yang valid.',
+            'in_reply_to.relation.required_with' => 'Relasi surat induk wajib diisi bila in_reply_to dikirim.',
+            'in_reply_to.relation.in' => 'Relasi surat induk harus salah satu dari: :values.',
         ];
     }
 
@@ -362,6 +396,10 @@ class IncomingLetterController extends Controller
             'scan' => 'berkas scan',
             'scan_images' => 'foto scan',
             'scan_images.*' => 'foto scan',
+            'in_reply_to' => 'induk runutan',
+            'in_reply_to.type' => 'tipe surat induk',
+            'in_reply_to.id' => 'id surat induk',
+            'in_reply_to.relation' => 'relasi surat induk',
         ];
     }
 

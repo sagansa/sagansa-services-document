@@ -52,6 +52,7 @@ class IncomingLetterService
         private readonly ImageToPdfComposer $composer = new ImageToPdfComposer,
         private readonly NumberingService $numbering = new NumberingService,
         private readonly AuditLogger $audit = new AuditLogger,
+        private readonly LetterLinkService $links = new LetterLinkService,
     ) {}
 
     /**
@@ -68,12 +69,16 @@ class IncomingLetterService
      * @param  list<string>  $imageBytesList  binary foto, satu foto = satu
      *                                        halaman (hanya untuk 'images').
      * @param  int|null  $actorId  user pelaku; null = auth()->id()
+     * @param  array{type: string, id: string, relation: string}|null  $inReplyTo
+     *                                                    induk runutan opsional — edge
+     *                                                    ditulis DALAM transaksi register (Task 9 fase 1b):
+     *                                                    gagal link → surat ikut rollback.
      *
      * @throws InvalidArgumentException scanKind tidak dikenal / received_at kosong / foto kosong-rusak
      * @throws PdfInvalidException scan final tidak diawali magic %PDF
      * @throws RuntimeException scan gagal ditulis ke disk documents
      */
-    public function register(array $data, string $scanBytes, string $scanKind, array $imageBytesList = [], ?int $actorId = null): IncomingLetter
+    public function register(array $data, string $scanBytes, string $scanKind, array $imageBytesList = [], ?int $actorId = null, ?array $inReplyTo = null): IncomingLetter
     {
         $actorId ??= auth()->id();
 
@@ -106,7 +111,7 @@ class IncomingLetterService
         $writtenPath = null;
 
         try {
-            return IncomingLetter::query()->getConnection()->transaction(function () use ($data, $scanPdf, $scanKind, $actorId, $year, &$writtenPath): IncomingLetter {
+            return IncomingLetter::query()->getConnection()->transaction(function () use ($data, $scanPdf, $scanKind, $actorId, $year, $inReplyTo, &$writtenPath): IncomingLetter {
                 // Nomor agenda dicadangkan DI DALAM transaksi register
                 // (savepoint): baris counter number_sequences dikunci,
                 // jadi dua register paralel selalu mendapat agenda
@@ -167,6 +172,24 @@ class IncomingLetterService
                         'scan_pages' => $letter->scan_pages,
                     ], fn ($value) => $value !== null),
                 );
+
+                // Edge in_reply_to (Task 9 fase 1b) ditulis DALAM transaksi
+                // register (savepoint, pola DocumentController Task 6): bila
+                // link() melempar (mis. induk terhapus dalam race setelah
+                // preflight controller), baris surat + agenda + scan ikut
+                // rollback — tidak pernah ada surat tanpa induk yang
+                // diminta user. Untuk surat baru siklus mustahil (belum
+                // punya edge), guard siklus tetap dijalankan link().
+                if ($inReplyTo !== null) {
+                    $this->links->link(
+                        $inReplyTo['type'],
+                        $inReplyTo['id'],
+                        'incoming_letter',
+                        $letterId,
+                        $inReplyTo['relation'],
+                        $actorId,
+                    );
+                }
 
                 return $letter;
             }, attempts: 5);

@@ -6,6 +6,7 @@ use App\Models\AuditLog;
 use App\Models\DispositionRecord;
 use App\Models\Document;
 use App\Models\IncomingLetter;
+use App\Models\LetterLink;
 use App\Models\Party;
 use App\Models\Signer;
 use App\Models\User;
@@ -143,6 +144,67 @@ class IncomingApiTest extends TestCase
         $this->assertSame(3, preg_match_all('#/Type\s*/Page(?!s)#', $stored), '3 foto harus menjadi 3 halaman');
         $this->assertSame($letter->scan_sha256, hash('sha256', $stored));
         $this->assertSame(3, $letter->scan_pages);
+    }
+
+    #[Test]
+    public function store_with_in_reply_to_document_creates_balasan_link_row(): void
+    {
+        $this->signInAsSigner();
+
+        $parent = Document::factory()->create([
+            'number' => '010/ST/DIR/X/2026',
+            'date' => '2026-10-20',
+        ]);
+
+        $response = $this->post('/api/v1/incoming-letters', $this->payload() + [
+            'in_reply_to' => [
+                'type' => 'document',
+                'id' => $parent->id,
+                'relation' => 'balasan',
+            ],
+            'scan' => UploadedFile::fake()->createWithContent('scan.pdf', '%PDF-1.4 balasan eksternal'),
+        ]);
+
+        $response->assertCreated()->assertJsonPath('success', true);
+
+        // Edge tercatat: surat keluar → surat masuk, relasi balasan, aktor
+        // user login (pola assert DatabaseHas ThreadApiTest Task 6).
+        $this->assertDatabaseHas('letter_links', [
+            'parent_type' => 'document',
+            'parent_id' => $parent->id,
+            'child_type' => 'incoming_letter',
+            'child_id' => $response->json('data.id'),
+            'relation' => 'balasan',
+            'created_by' => $this->user->id,
+        ], 'mysql_document');
+
+        // Thread dari surat keluar kini memuat 2 node — surat masuk
+        // menjadi child balasan.
+        $this->getJson("/api/v1/letters/thread/document/{$parent->id}")
+            ->assertOk()
+            ->assertJsonPath('data.total', 2);
+    }
+
+    #[Test]
+    public function store_with_ghost_in_reply_to_returns_422_without_incoming_row(): void
+    {
+        $this->signInAsSigner();
+
+        $response = $this->post('/api/v1/incoming-letters', $this->payload() + [
+            'in_reply_to' => [
+                'type' => 'document',
+                'id' => (string) Str::uuid(),
+                'relation' => 'balasan',
+            ],
+            'scan' => UploadedFile::fake()->createWithContent('scan.pdf', '%PDF-1.4 ghost'),
+        ]);
+
+        // Preflight induk gagal → 422 LINK_TARGET_NOT_FOUND, TANPA surat
+        // yatim (agenda tidak terpakai, tanpa edge, tanpa scan di disk).
+        $response->assertStatus(422)
+            ->assertJsonPath('error.code', 'LINK_TARGET_NOT_FOUND');
+        $this->assertSame(0, IncomingLetter::query()->count());
+        $this->assertSame(0, LetterLink::query()->count());
     }
 
     #[Test]
