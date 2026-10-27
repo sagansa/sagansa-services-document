@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\V1\DocumentController;
 use App\Http\Controllers\Api\V1\IssuanceController;
 use App\Http\Controllers\Api\V1\LetterTypeController;
 use App\Http\Controllers\Api\V1\PartyController;
+use App\Http\Controllers\Api\V1\SignerController;
 use App\Http\Controllers\Api\V1\SigningController;
 use App\Http\Controllers\Api\V1\TemplateController;
 use Illuminate\Http\Request;
@@ -50,6 +51,10 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'document.role'])->group(functi
     Route::get('/templates', [TemplateController::class, 'index']);
 
     Route::get('/me/signer', [DocumentController::class, 'meSigner']);
+
+    // Direktori signer aktif (Task 20): wizard Buat Surat memilih signer
+    // komisaris milik user lain — /me/signer tidak memuatnya.
+    Route::get('/signers', [SignerController::class, 'index']);
 
     // Penerbitan inti (Task 16): pra-final, finalize a-d, reissue,
     // revoke, void.
