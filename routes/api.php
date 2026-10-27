@@ -1,7 +1,9 @@
 <?php
 
 use App\Http\Controllers\Api\V1\AttachmentController;
+use App\Http\Controllers\Api\V1\DispositionController;
 use App\Http\Controllers\Api\V1\DocumentController;
+use App\Http\Controllers\Api\V1\IncomingLetterController;
 use App\Http\Controllers\Api\V1\IssuanceController;
 use App\Http\Controllers\Api\V1\LetterTypeController;
 use App\Http\Controllers\Api\V1\PartyController;
@@ -63,6 +65,17 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'document.role'])->group(functi
     Route::post('/documents/{id}/reissue', [IssuanceController::class, 'reissue'])->whereUuid('id');
     Route::post('/documents/{id}/revoke', [IssuanceController::class, 'revoke'])->whereUuid('id');
     Route::post('/documents/{id}/void', [IssuanceController::class, 'void'])->whereUuid('id');
+
+    // Surat masuk (fase 1b): registrasi scan, buku agenda, disposisi.
+    // Scan di-stream dari endpoint terproteksi — bukan URL publik.
+    Route::get('/incoming-letters', [IncomingLetterController::class, 'index']);
+    Route::post('/incoming-letters', [IncomingLetterController::class, 'store']);
+    Route::get('/incoming-letters/{id}', [IncomingLetterController::class, 'show'])->whereUuid('id');
+    Route::patch('/incoming-letters/{id}', [IncomingLetterController::class, 'update'])->whereUuid('id');
+    Route::post('/incoming-letters/{id}/status', [IncomingLetterController::class, 'status'])->whereUuid('id');
+    Route::get('/incoming-letters/{id}/scan', [IncomingLetterController::class, 'scan'])->whereUuid('id');
+    Route::post('/incoming-letters/{id}/dispositions', [DispositionController::class, 'store'])->whereUuid('id');
+    Route::post('/dispositions/{id}/complete', [DispositionController::class, 'complete'])->whereUuid('id');
 });
 
 // Unduhan hasil pra-final (Task 16) — DI LUAR grup auth: URL signed-nya

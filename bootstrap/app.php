@@ -2,8 +2,12 @@
 
 use App\Exceptions\AlreadySignedException;
 use App\Exceptions\DocumentLockedException;
+use App\Exceptions\IncomingLockedException;
+use App\Exceptions\LinkCycleException;
+use App\Exceptions\LinkTargetNotFoundException;
 use App\Exceptions\PdfInvalidException;
 use App\Exceptions\PdfUnsupportedException;
+use App\Exceptions\ScanInvalidException;
 use App\Exceptions\SigningIncompleteException;
 use App\Http\Middleware\DocumentRoleGate;
 use Illuminate\Auth\AuthenticationException;
@@ -129,6 +133,48 @@ return Application::configure(basePath: dirname(__DIR__))
             }
 
             return $error(422, 'PDF_UNSUPPORTED', $e->getMessage() !== '' ? $e->getMessage() : 'Berkas PDF memakai fitur yang tidak didukung.');
+        });
+
+        // 409 — surat masuk terkunci: status hanya boleh MAJU satu arah,
+        // `selesai` membekukan seluruh field, dan disposisi tidak boleh
+        // diselesaikan dua kali (fase 1b).
+        $exceptions->render(function (IncomingLockedException $e, Request $request) use ($isApi, $error) {
+            if (! $isApi($request)) {
+                return null;
+            }
+
+            return $error(409, 'INCOMING_LOCKED', $e->getMessage() !== '' ? $e->getMessage() : 'Surat masuk terkunci untuk operasi ini.');
+        });
+
+        // 422 — target link runutan tidak ditemukan (defensif untuk
+        // endpoint thread fase 1b; controller umumnya findOrFail lebih
+        // dulu sehingga terpetakan 404).
+        $exceptions->render(function (LinkTargetNotFoundException $e, Request $request) use ($isApi, $error) {
+            if (! $isApi($request)) {
+                return null;
+            }
+
+            return $error(422, 'LINK_TARGET_NOT_FOUND', $e->getMessage() !== '' ? $e->getMessage() : 'Target link surat tidak ditemukan.');
+        });
+
+        // 422 — penambahan edge letter_links akan membentuk siklus.
+        $exceptions->render(function (LinkCycleException $e, Request $request) use ($isApi, $error) {
+            if (! $isApi($request)) {
+                return null;
+            }
+
+            return $error(422, 'LINK_CYCLE', $e->getMessage() !== '' ? $e->getMessage() : 'Link ditolak karena membentuk siklus runutan.');
+        });
+
+        // 422 — payload scan surat masuk tidak sah secara semantik: tidak
+        // ada scan sama sekali, atau scan + scan_images dikirim bersamaan
+        // (kesalahan per-field mime/ukuran tetap VALIDATION_ERROR).
+        $exceptions->render(function (ScanInvalidException $e, Request $request) use ($isApi, $error) {
+            if (! $isApi($request)) {
+                return null;
+            }
+
+            return $error(422, 'SCAN_INVALID', $e->getMessage() !== '' ? $e->getMessage() : 'Scan surat masuk tidak valid.');
         });
 
         // HttpException dipetakan per-status: 403 gate peran/otorisasi,
