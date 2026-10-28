@@ -1,6 +1,6 @@
 # Sagansa Document Service (`document.sagansa.id`)
 
-Microservice Laravel untuk surat perusahaan: pembuatan draft dari template, penomoran per unit, TTE visual + QR verifikasi, e-materai visual tanpa API pihak ketiga, arsip 10 tahun, dan halaman verifikasi publik `/verify/{uuid}` yang menjadi target pemindaian QR pada surat terbit.
+Microservice Laravel untuk surat perusahaan: pembuatan draft dari template, penomoran per unit, TTE visual + QR verifikasi, e-materai visual tanpa API pihak ketiga, arsip 10 tahun, dan halaman verifikasi publik `/verify/{uuid}` yang menjadi target pemindaian QR pada surat terbit. Fase 1b menambah surat masuk (scan + agenda + disposisi) dan runutan surat lintas jenis — lihat bagian [Surat Masuk, Disposisi & Runutan](#surat-masuk-disposisi--runutan-fase-1b).
 
 ## Arsitektur Auth
 
@@ -28,7 +28,7 @@ Setup auth meniru persis pola `services/img`:
 |--------|------|-----------|
 | `GET` | `/api/user` | Info user token (debug; Sanctum saja, tanpa gate). |
 | `GET` | `/api/v1/documents` | Daftar surat paginate 15; filter `?status=&letter_type=&year=&q=`. |
-| `POST` | `/api/v1/documents` | Buat draft (`duplicate_from_id` opsional untuk salinan surat terbit). |
+| `POST` | `/api/v1/documents` | Buat draft (`duplicate_from_id` opsional untuk salinan surat terbit; `in_reply_to` opsional — fase 1b). |
 | `GET` | `/api/v1/documents/{id}` | Detail (termasuk lampiran, issuances, `body_html` untuk draft\|menunggu_ttd). |
 | `PATCH` | `/api/v1/documents/{id}` | Ubah isi — hanya draft\|menunggu_ttd (selain itu 409). |
 | `POST` | `/api/v1/documents/{id}/numbering/reserve` | Pesan nomor surat per unit (idempoten untuk draft yang sama). |
@@ -78,6 +78,53 @@ curl -X POST https://document.sagansa.id/api/v1/documents/<uuid>/finalize \
 curl https://document.sagansa.id/verify/<uuid>
 ```
 
+## Surat Masuk, Disposisi & Runutan (fase 1b)
+
+Fase 1b menambah **surat masuk** sebagai agregat terpisah `incoming_letters` (isinya tidak kita karang/tanda tangan — scan ber-hash adalah bukti tunggal yang immutable), **disposisi** append-only (`disposition_records`), dan **tautan antar-surat** lintas jenis (`letter_links`, relasi `balasan`/`tindak_lanjut`/`referensi`) yang membentuk **runutan (thread)**. Seluruh modul di belakang gate yang sama (`auth:sanctum` + `document.role`); schema aditif via `services/migration` (3 tabel baru + reuse `number_sequences`).
+
+### Endpoint fase 1b
+
+| Method | Path | Deskripsi |
+|--------|------|-----------|
+| `GET` | `/api/v1/incoming-letters` | Buku agenda paginate 15 (urut `received_at` desc); filter `?status=terdaftar\|diproses\|selesai&sifat=biasa\|segera\|rahasia&year=&q=` (`q` = nomor agenda/nomor eksternal/perihal). |
+| `POST` | `/api/v1/incoming-letters` | Registrasi (multipart): field isian (`sender_party_id` wajib dari buku pihak, `received_at`, `subject`, `sifat`, dsb.) + scan WAJIB salah satu bentuk — `scan` (pdf/jpg/png maks 20 MB) **atau** `scan_images[]` (foto, digabung otomatis menjadi satu PDF); keduanya sekaligus/tidak sama sekali → 422 `SCAN_INVALID`. `in_reply_to` opsional. → 201 + nomor agenda. |
+| `GET` | `/api/v1/incoming-letters/{id}` | Detail: `sender_party`, `dispositions` (urut waktu), `thread` (dari akar runutan), `links_count`. |
+| `PATCH` | `/api/v1/incoming-letters/{id}` | Ubah isian — hanya saat belum `selesai` (else 409 `INCOMING_LOCKED`); scan tidak pernah diganti (immutable). |
+| `POST` | `/api/v1/incoming-letters/{id}/status` | Naikkan status `{status}` — hanya MAJU `terdaftar→diproses→selesai` (mundur/mengulang → 409). |
+| `GET` | `/api/v1/incoming-letters/{id}/scan` | Stream scan PDF (unduh `SM-001-X-2026.pdf`) dari disk private — terproteksi token + gate, **bukan URL publik**. |
+| `POST` | `/api/v1/incoming-letters/{id}/dispositions` | Tambah disposisi `{to_user_id, instruction}` — penerima wajib signer aktif (else 422); surat otomatis naik `diproses` bila masih `terdaftar`. → 201. |
+| `POST` | `/api/v1/dispositions/{id}/complete` | Tandai disposisi selesai (`acted_at` — satu-satunya kolom yang boleh berubah); complete ulang → 409. |
+| `GET` | `/api/v1/letters/thread/{type}/{id}` | Runutan dari node mana pun (`type` = `document`\|`incoming_letter`): `{root, nodes[], total}` **flat kronologis** — tiap node: `number`, `date`, `title`, `party_name`, `status`, `relation_to_parent`, `depth`. Node tak dikenal → 404 netral di route. |
+| `POST` | `/api/v1/documents` (+ `in_reply_to`) | Ekstensi create draft fase 1: body JSON `in_reply_to {type, id, relation}` menautkan draft baru ke surat induk (alur "Buat balasan" dari surat masuk). |
+
+Guard tautan (sama untuk `in_reply_to` di `POST /documents` maupun `POST /incoming-letters`): induk tak dikenal → 422 `LINK_TARGET_NOT_FOUND` (dicegah **sebelum** agenda dicadangkan — tanpa surat yatim), siklus → 422 `LINK_CYCLE`, self-link ditolak, duplikat edge → 422 diam (idempoten).
+
+### Nomor agenda
+
+Reuse mekanisme counter fase 1 (`number_sequences`, code `SM`, unit `IN`) — baris counter dikunci `lockForUpdate` **di dalam transaksi registrasi**, sehingga dua register paralel selalu mendapat nomor berurutan tanpa duplikat. Format `SM-%03d/BULAN-ROMAWI/TAHUN`, contoh `SM-001/X/2026`; tahun diturunkan dari `received_at` (folder scan, kolom `year`, dan counter selalu sepakat).
+
+### Contoh curl fase 1b
+
+```bash
+# Daftarkan surat masuk (scan PDF) sebagai balasan pihak luar atas surat keluar kita
+curl -X POST https://document.sagansa.id/api/v1/incoming-letters \
+  -H "Authorization: Bearer <token>" \
+  -F "sender_party_id=7" -F "received_at=2026-10-28" -F "subject=Jawaban penawaran harga" \
+  -F "sifat=biasa" -F "number_external=123/EXT/2026" -F "scan=@surat-masuk.pdf" \
+  -F "in_reply_to[type]=document" -F "in_reply_to[id]=<uuid-surat-keluar>" -F "in_reply_to[relation]=balasan"
+# → 201 {"success":true,"data":{"agenda_number":"SM-001/X/2026","scan":{"sha256":"…","size":…,"pages":1},…}}
+
+# Runutan surat dari node mana pun — akar dihitung otomatis, urut kronologis
+curl -H "Authorization: Bearer <token>" \
+  https://document.sagansa.id/api/v1/letters/thread/incoming_letter/<uuid>
+# → {"success":true,"data":{"root":{...},"nodes":[{...surat masuk...},{...balasan keluar...}],"total":2}}
+```
+
+### Catatan rahasia & penyimpanan scan
+
+- `sifat=rahasia` **memaksa** `classification='rahasia'` (klasifikasi tidak boleh lebih longgar dari sifat). Surat rahasia tetap tampil penuh bagi signer (internal, pola fase 1), tapi **isi scan hanya pernah dilayani via `GET /incoming-letters/{id}/scan` yang terproteksi** — list hanya memuat metadata integritas (`sha256`/`size`/`pages`), dan scan tidak pernah dibuka lewat URL publik maupun signed (beda dari `/verify/*` fase 1).
+- Scan tersimpan di disk private `documents` pada `incoming/{yyyy}/{id}/scan.pdf`, di-hash SHA-256 saat registrasi, tidak bisa diganti, dan ikut kebijakan backup 10 tahun yang sama dengan berkas terbit fase 1 (tidak dapat diregenerasi dari DB).
+
 ## Urutan Alur C (TTE resmi + e-materai)
 
 Alur C dipakai bila surat harus ditandatangani secara elektronik resmi (mis. via BSrE) dan dibubuhi e-materai: **stempel dulu, upload terakhir**. Klien memanggil `pre-final` mode b untuk menempelkan QR verifikasi pada PDF (atau `finalize` metode b bila tanpa ttd resmi); hasil pra-final diunduh lewat URL signed, lalu ditandatangani elektronik dan dibubuhi e-materai **di luar sistem** (e-materai di sini adalah gambar visual pada PDF — tanpa integrasi API Peruri), dan baru PDF yang sudah final diunggah kembali via `finalize` metode `c` (`pdf_base64`, **tanpa overlay** — men-stamp setelah tanda tangan resmi ditolak 409 `ALREADY_SIGNED`). Metode `d` adalah varian foto/scan: beberapa gambar dikomposisi menjadi satu PDF. Riwayat metode tercatat per issuance; terbit ulang lewat `reissue` + note alasan.
@@ -124,7 +171,7 @@ Fase 1 memakai `QUEUE_CONNECTION=sync` — satu-satunya job saat ini (`RecordVer
 ## Testing
 
 ```bash
-php artisan test   # 148 passed, 1 skipped (sqlite in-memory — tanpa MySQL nyata)
+php artisan test   # 215 passed, 1 skipped (sqlite in-memory — tanpa MySQL nyata)
 ```
 
 Koneksi `mysql_auth` & `mysql_document` otomatis ditukar ke sqlite in-memory saat `APP_ENV=testing` (`config/database.php`), jadi CI tidak butuh server MySQL. Test yang butuh binary `qpdf` otomatis skipped bila binary tidak ada (itulah 1 skipped di mesin tanpa qpdf).
