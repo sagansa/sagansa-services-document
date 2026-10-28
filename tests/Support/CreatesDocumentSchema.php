@@ -144,6 +144,8 @@ trait CreatesDocumentSchema
 
         // 5. signers — penandatangan internal; user_id merujuk users di DB
         //    sagansa_user, tanpa FK lintas database.
+        //    signature_asset: base64 PNG tanpa prefiks data-URI (fase 1c,
+        //    paralel migration 2026_10_28_000001 di services/migration).
         $schema->create('signers', function (Blueprint $table) {
             $table->id();
             $table->unsignedBigInteger('user_id');
@@ -151,6 +153,7 @@ trait CreatesDocumentSchema
             $table->string('display_name');
             $table->string('title')->nullable();
             $table->string('signature_asset_path')->nullable();
+            $table->longText('signature_asset')->nullable();
             $table->boolean('is_active')->default(true);
             $table->timestamps();
 
