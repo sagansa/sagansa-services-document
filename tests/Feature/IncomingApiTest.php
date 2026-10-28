@@ -545,11 +545,40 @@ class IncomingApiTest extends TestCase
             ->firstOrFail();
         $this->assertSame($this->user->id, $log->actor_user_id);
 
-        // Surat yang sudah diproses (atau selesai) tetap boleh tambah disposisi.
+        // Surat yang sudah diproses tetap boleh tambah disposisi
+        // (surat `selesai` ditolak — lihat test di bawah).
         $this->postJson("/api/v1/incoming-letters/{$letter->id}/dispositions", [
             'to_user_id' => $signerAktif->user_id,
             'instruction' => 'Disposisi tambahan',
         ])->assertCreated();
+    }
+
+    #[Test]
+    public function disposition_on_selesai_letter_is_rejected_409(): void
+    {
+        $this->signInAsSigner();
+
+        /** @var IncomingLetter $letter */
+        $letter = IncomingLetter::factory()->create(['status' => 'selesai']);
+        $signerAktif = Signer::factory()->create(['user_id' => 4242]);
+
+        $this->postJson("/api/v1/incoming-letters/{$letter->id}/dispositions", [
+            'to_user_id' => $signerAktif->user_id,
+            'instruction' => 'Percobaan disposisi pada arsip final',
+        ])
+            ->assertStatus(409)
+            ->assertJsonPath('error.code', 'INCOMING_LOCKED');
+
+        // Arsip final utuh: tanpa baris disposisi, tanpa jejak audit, dan
+        // status surat tetap `selesai` (keputusan #9 fase 1b).
+        $this->assertSame(0, DispositionRecord::query()
+            ->where('incoming_letter_id', $letter->id)
+            ->count());
+        $this->assertSame(0, AuditLog::query()
+            ->where('document_id', $letter->id)
+            ->where('event', AuditLogger::EVENT_DISPOSITION_ADDED)
+            ->count());
+        $this->assertSame('selesai', $letter->fresh()->status);
     }
 
     #[Test]

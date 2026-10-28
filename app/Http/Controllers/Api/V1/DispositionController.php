@@ -20,7 +20,8 @@ use Illuminate\Validation\ValidationException;
  *   POST /incoming-letters/{id}/dispositions  {to_user_id, instruction}
  *        — penerima WAJIB signer aktif (modul tertutup bagi non-signer,
  *          422 pesan Indonesia); surat otomatis naik `diproses` bila masih
- *          `terdaftar` (sudah diproses/selesai tetap boleh menambah).
+ *          `terdaftar` (sudah `diproses` tetap boleh menambah; `selesai`
+ *          = arsip final → 409 INCOMING_LOCKED).
  *   POST /dispositions/{id}/complete
  *        — tandai selesai + acted_at (SATU-SATUNYA kolom baris disposisi
  *          yang boleh berubah — append-only); complete ulang → 409
@@ -67,6 +68,17 @@ class DispositionController extends Controller
 
         /** @var IncomingLetter $letter */
         $letter = IncomingLetter::query()->findOrFail($letterId);
+
+        // `selesai` = arsip final (keputusan #9 fase 1b): tidak ada
+        // pengarahan baru pada surat yang sudah selesai — 409
+        // INCOMING_LOCKED, code sama dengan lock PATCH surat masuk
+        // agar klien cukup satu penanganan 409.
+        if ($letter->status === 'selesai') {
+            throw new IncomingLockedException(
+                "Surat masuk {$letter->agenda_number} sudah selesai — disposisi tidak dapat ditambahkan (arsip final).",
+            );
+        }
+
         $actorId = (int) $request->user()->id;
 
         $record = DispositionRecord::query()->getConnection()->transaction(

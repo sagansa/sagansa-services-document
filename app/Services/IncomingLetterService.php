@@ -293,6 +293,15 @@ class IncomingLetterService
 
             $locked->fill($applicable);
 
+            // received_at berubah → year diturunkan ulang dari tahun baru
+            // (register() mengabaikan year payload; update menyamakan
+            // kembali) supaya filter tahun daftar sepakat dengan tanggal
+            // tampil. Folder scan di disk TIDAK di-rename — bukti tunggal
+            // sudah tertulis saat register, path scan_path tetap.
+            if (array_key_exists('received_at', $applicable) && $locked->received_at !== null) {
+                $locked->year = (int) $locked->received_at->format('Y');
+            }
+
             // Invariant yang sama dengan register(): classification tidak
             // boleh lebih longgar dari sifat. Hanya dinaikkan otomatis ke
             // rahasia — tidak pernah diturunkan (over-classify aman,

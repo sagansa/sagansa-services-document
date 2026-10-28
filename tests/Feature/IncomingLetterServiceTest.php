@@ -311,6 +311,27 @@ class IncomingLetterServiceTest extends TestCase
     }
 
     #[Test]
+    public function update_rederives_year_when_received_at_changes(): void
+    {
+        // Terdaftar 2026 lalu PATCH received_at lintas tahun.
+        $letter = IncomingLetter::factory()->status('terdaftar')->create([
+            'year' => 2026,
+            'received_at' => '2026-12-28',
+        ]);
+        $scanPath = $letter->scan_path;
+        $this->assertSame(2026, $letter->year);
+
+        $updated = $this->service->update($letter, ['received_at' => '2027-01-05'], 77);
+
+        // year diturunkan ulang dari received_at baru supaya filter tahun
+        // daftar sepakat dengan tanggal tampil. Folder scan di disk TIDAK
+        // di-rename (bukti tunggal sudah tertulis) — scan_path tetap.
+        $this->assertSame(2027, $updated->fresh()->year);
+        $this->assertSame('2027-01-05', $updated->fresh()->received_at->toDateString());
+        $this->assertSame($scanPath, $updated->fresh()->scan_path, 'folder scan tidak ikut pindah');
+    }
+
+    #[Test]
     public function failure_after_scan_write_cleans_up_orphan_file_and_rethrows(): void
     {
         // Audit insert dipaksa gagal — terjadi SETELAH Storage::put sukses
