@@ -17,6 +17,7 @@ use PHPUnit\Framework\Attributes\Test;
 use setasign\Fpdi\Fpdi;
 use Tests\Support\CreatesAuthSchema;
 use Tests\Support\CreatesDocumentSchema;
+use Tests\Support\DecodesPdfStreams;
 use Tests\TestCase;
 
 /**
@@ -34,7 +35,7 @@ use Tests\TestCase;
  */
 class IssuanceApiTest extends TestCase
 {
-    use CreatesAuthSchema, CreatesDocumentSchema;
+    use CreatesAuthSchema, CreatesDocumentSchema, DecodesPdfStreams;
 
     private User $creator;
 
@@ -586,24 +587,6 @@ class IssuanceApiTest extends TestCase
         return base64_encode(
             (string) file_get_contents(dirname(__DIR__).'/fixtures/sample_pdf14.pdf'),
         );
-    }
-
-    /**
-     * Gabungan seluruh content stream PDF setelah dekompresi zlib
-     * (dompdf CPDF & FPDF sama-sama menulis stream FlateDecode; string
-     * literal font core terbaca setelah inflate).
-     */
-    private function decodedStreams(string $pdf): string
-    {
-        preg_match_all('/stream\r?\n(.*?)\r?\nendstream/s', $pdf, $matches);
-
-        $decoded = '';
-        foreach ($matches[1] as $chunk) {
-            $uncompressed = @gzuncompress($chunk);
-            $decoded .= $uncompressed === false ? $chunk : $uncompressed;
-        }
-
-        return $decoded;
     }
 
     /**

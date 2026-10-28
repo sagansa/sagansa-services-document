@@ -18,6 +18,7 @@ use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\Test;
 use RuntimeException;
 use Tests\Support\CreatesDocumentSchema;
+use Tests\Support\DecodesPdfStreams;
 use Tests\TestCase;
 
 /**
@@ -32,7 +33,7 @@ use Tests\TestCase;
  */
 class FinalizerTest extends TestCase
 {
-    use CreatesDocumentSchema;
+    use CreatesDocumentSchema, DecodesPdfStreams;
 
     private Finalizer $finalizer;
 
@@ -313,22 +314,5 @@ class FinalizerTest extends TestCase
             'subject' => 'Surat Kuasa Pengangkatan',
             'body_html' => '<p>Dengan hormat,</p>',
         ]);
-    }
-
-    /**
-     * Gabungan seluruh content stream PDF setelah dekompresi zlib
-     * (pola PdfRendererTest::decodedStreams).
-     */
-    private function decodedStreams(string $pdf): string
-    {
-        preg_match_all('/stream\r?\n(.*?)\r?\nendstream/s', $pdf, $matches);
-
-        $decoded = '';
-        foreach ($matches[1] as $chunk) {
-            $uncompressed = @gzuncompress($chunk);
-            $decoded .= $uncompressed === false ? $chunk : $uncompressed;
-        }
-
-        return $decoded;
     }
 }

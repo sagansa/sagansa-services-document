@@ -9,6 +9,7 @@ use App\Models\SigningRequest;
 use App\Services\PdfRenderer;
 use Illuminate\Support\Facades\Log;
 use Tests\Support\CreatesDocumentSchema;
+use Tests\Support\DecodesPdfStreams;
 use Tests\Support\MakesSignaturePng;
 use Tests\TestCase;
 
@@ -24,7 +25,7 @@ use Tests\TestCase;
  */
 class PdfRendererTest extends TestCase
 {
-    use CreatesDocumentSchema, MakesSignaturePng;
+    use CreatesDocumentSchema, DecodesPdfStreams, MakesSignaturePng;
 
     private PdfRenderer $renderer;
 
@@ -226,24 +227,5 @@ class PdfRendererTest extends TestCase
             'date' => '2026-10-26',
             'body_html' => '<p>Dengan hormat,</p><p>Sehubungan dengan surat nomor <strong>001/ST/DIR/X/2026</strong>, dengan ini kami menetapkan hal-hal berikut.</p>',
         ]);
-    }
-
-    /**
-     * Gabungan seluruh content stream PDF setelah dekompresi
-     * FlateDecode — CPDF menulis stream ber-header zlib (0x789c)
-     * sehingga didekompres dengan gzuncompress. String literal teks
-     * base-14 terbaca di sini.
-     */
-    private function decodedStreams(string $pdf): string
-    {
-        preg_match_all('/stream\r?\n(.*?)\r?\nendstream/s', $pdf, $matches);
-
-        $decoded = '';
-        foreach ($matches[1] as $chunk) {
-            $uncompressed = @gzuncompress($chunk);
-            $decoded .= $uncompressed === false ? $chunk : $uncompressed;
-        }
-
-        return $decoded;
     }
 }
