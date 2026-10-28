@@ -27,9 +27,12 @@ class PdfRenderer
      */
     public function render(Document $document): string
     {
+        $signers = $this->signersFor($document);
+        $this->warnCorruptSignatureAssets($signers);
+
         $pdf = Pdf::loadView('letters.base', [
             'document' => $document,
-            'signers' => $this->signersFor($document),
+            'signers' => $signers,
             'qrPng' => base64_encode($this->qrBuilder->build($document->id)),
             'attachmentsCount' => $document->attachments()->count(),
         ])->setPaper('a4');
@@ -55,6 +58,7 @@ class PdfRenderer
     private function signersFor(Document $document): Collection
     {
         $creatorSigners = Signer::query()
+            ->select(['id', 'role', 'display_name', 'title', 'signature_asset'])
             ->where('user_id', $document->created_by)
             ->where('is_active', true)
             ->get();
@@ -64,6 +68,7 @@ class PdfRenderer
             ?? $this->genericDirektur();
 
         $approved = Signer::query()
+            ->select(['id', 'role', 'display_name', 'title', 'signature_asset'])
             ->whereHas('signingRequests', function ($query) use ($document): void {
                 $query->where('document_id', $document->id)
                     ->where('status', 'disetujui');
@@ -72,6 +77,23 @@ class PdfRenderer
             ->get();
 
         return $approved->prepend($creator)->unique('id')->values();
+    }
+
+    /**
+     * Fail-soft render: aset korup tidak boleh menggagalkan penerbitan —
+     * slot TTD kembali ke kotak placeholder, jejaknya dicatat di log.
+     *
+     * @param  Collection<int, Signer>  $signers
+     */
+    private function warnCorruptSignatureAssets(Collection $signers): void
+    {
+        foreach ($signers as $signer) {
+            if (filled($signer->signature_asset) && $signer->signaturePreview() === null) {
+                logger()->warning('Aset tanda tangan penandatangan tidak dapat dirender — memakai placeholder.', [
+                    'signer_id' => $signer->id,
+                ]);
+            }
+        }
     }
 
     /**

@@ -59,6 +59,10 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'document.role'])->group(functi
     // komisaris milik user lain — /me/signer tidak memuatnya.
     Route::get('/signers', [SignerController::class, 'index']);
 
+    // Aset tanda tangan tersimpan (fase 1c) — bytes PNG untuk overlay
+    // Mode B mobile. Gate internal document.role; 404 bila kosong.
+    Route::get('/signers/{id}/signature', [SignerController::class, 'signature'])->whereNumber('id');
+
     // Penerbitan inti (Task 16): pra-final, finalize a-d, reissue,
     // revoke, void.
     Route::post('/documents/{id}/pre-final', [IssuanceController::class, 'preFinal'])->whereUuid('id');

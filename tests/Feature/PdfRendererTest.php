@@ -7,7 +7,9 @@ use App\Models\DocumentAttachment;
 use App\Models\Signer;
 use App\Models\SigningRequest;
 use App\Services\PdfRenderer;
+use Illuminate\Support\Facades\Log;
 use Tests\Support\CreatesDocumentSchema;
+use Tests\Support\MakesSignaturePng;
 use Tests\TestCase;
 
 /**
@@ -22,7 +24,7 @@ use Tests\TestCase;
  */
 class PdfRendererTest extends TestCase
 {
-    use CreatesDocumentSchema;
+    use CreatesDocumentSchema, MakesSignaturePng;
 
     private PdfRenderer $renderer;
 
@@ -153,6 +155,61 @@ class PdfRendererTest extends TestCase
         $text = $this->decodedStreams($this->renderer->render($document));
 
         $this->assertStringContainsString('Direktur', $text, 'fallback label Direktur generik harus tampil');
+    }
+
+    #[Test]
+    public function render_embeds_stored_signature_asset_in_ttd_slot(): void
+    {
+        // Tanpa aset: hanya QR yang ter-embed sebagai image XObject.
+        $plain = $this->makeLetter();
+        $baselineImages = substr_count($this->renderer->render($plain), '/Subtype /Image');
+
+        $signer = Signer::factory()->role('direktur')->create([
+            'display_name' => 'Andi Wijaya',
+            'signature_asset' => $this->signaturePngBase64(),
+        ]);
+        $document = $this->makeLetter(['created_by' => $signer->user_id]);
+
+        $pdf = $this->renderer->render($document);
+
+        $this->assertSame('%PDF', substr($pdf, 0, 4));
+        $this->assertGreaterThan(
+            $baselineImages,
+            substr_count($pdf, '/Subtype /Image'),
+            'aset TTD harus menjadi image XObject tambahan di blok penandatangan',
+        );
+
+        $text = $this->decodedStreams($pdf);
+        $this->assertStringContainsString('Andi Wijaya', $text, 'nama penandatangan tetap tampil di bawah aset');
+    }
+
+    #[Test]
+    public function render_falls_back_to_placeholder_and_logs_warning_for_corrupt_asset(): void
+    {
+        Log::spy();
+
+        $plain = $this->makeLetter();
+        $baselineImages = substr_count($this->renderer->render($plain), '/Subtype /Image');
+
+        $signer = Signer::factory()->role('direktur')->create([
+            'display_name' => 'Andi Wijaya',
+            'signature_asset' => base64_encode('bukan-png'),
+        ]);
+        $document = $this->makeLetter(['created_by' => $signer->user_id]);
+
+        $pdf = $this->renderer->render($document);
+
+        // Fail-soft: PDF tetap terbit, slot kembali jadi kotak placeholder.
+        $this->assertSame('%PDF', substr($pdf, 0, 4));
+        $this->assertSame(
+            $baselineImages,
+            substr_count($pdf, '/Subtype /Image'),
+            'aset korup tidak boleh menambah image XObject',
+        );
+
+        Log::shouldHaveReceived('warning')
+            ->withArgs(fn (string $message, array $context = []): bool => str_contains($message, 'tidak dapat dirender')
+                && ($context['signer_id'] ?? null) === $signer->id);
     }
 
     /**

@@ -348,7 +348,10 @@ class DocumentController extends Controller
      */
     public function meSigner(Request $request): JsonResponse
     {
+        // Kolom aset (LONGTEXT) tidak dimuat di list — flag via selectRaw.
         $signers = Signer::query()
+            ->select(['id', 'role', 'display_name', 'title'])
+            ->selectRaw('(signature_asset IS NOT NULL) as has_signature')
             ->where('user_id', $request->user()->id)
             ->where('is_active', true)
             ->orderBy('id')
@@ -362,8 +365,7 @@ class DocumentController extends Controller
                     'role' => $signer->role,
                     'display_name' => $signer->display_name,
                     'title' => $signer->title,
-                    'signature_ready' => $signer->signature_asset_path !== null
-                        && Storage::disk('documents')->exists($signer->signature_asset_path),
+                    'has_signature' => (bool) $signer->has_signature,
                 ])->all(),
             ],
         ]);

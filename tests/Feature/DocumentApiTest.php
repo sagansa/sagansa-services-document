@@ -18,6 +18,7 @@ use Laravel\Sanctum\Sanctum;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\Support\CreatesAuthSchema;
 use Tests\Support\CreatesDocumentSchema;
+use Tests\Support\MakesSignaturePng;
 use Tests\TestCase;
 
 /**
@@ -27,7 +28,7 @@ use Tests\TestCase;
  */
 class DocumentApiTest extends TestCase
 {
-    use CreatesAuthSchema, CreatesDocumentSchema;
+    use CreatesAuthSchema, CreatesDocumentSchema, MakesSignaturePng;
 
     private User $user;
 
@@ -533,22 +534,21 @@ class DocumentApiTest extends TestCase
     {
         Sanctum::actingAs($this->user);
 
-        $readyPath = 'signatures/ttd-001.png';
-        Storage::disk('documents')->put($readyPath, 'PNG-BYTES');
+        $signatureAsset = $this->signaturePngBase64();
 
         Signer::factory()->create([
             'user_id' => $this->user->id,
             'role' => 'direktur',
             'display_name' => 'Budi',
             'title' => 'Direktur Utama',
-            'signature_asset_path' => $readyPath,
+            'signature_asset' => $signatureAsset,
         ]);
         Signer::factory()->create([
             'user_id' => $this->user->id,
             'role' => 'komisaris',
             'display_name' => 'Sari',
             'title' => null,
-            'signature_asset_path' => null,
+            'signature_asset' => null,
         ]);
         // Milik user lain & yang non-aktif tidak boleh ikut.
         Signer::factory()->create(['user_id' => 999999, 'role' => 'direktur']);
@@ -564,10 +564,11 @@ class DocumentApiTest extends TestCase
         $this->assertSame('direktur', $signers[0]['role']);
         $this->assertSame('Budi', $signers[0]['display_name']);
         $this->assertSame('Direktur Utama', $signers[0]['title']);
-        $this->assertTrue($signers[0]['signature_ready']);
+        $this->assertTrue($signers[0]['has_signature']);
+        $this->assertArrayNotHasKey('signature_ready', $signers[0]);
 
         $this->assertSame('komisaris', $signers[1]['role']);
-        $this->assertFalse($signers[1]['signature_ready']);
+        $this->assertFalse($signers[1]['has_signature']);
     }
 
     #[Test]

@@ -4,11 +4,11 @@ namespace Tests\Feature;
 
 use App\Models\Signer;
 use App\Models\User;
-use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\Sanctum;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\Support\CreatesAuthSchema;
 use Tests\Support\CreatesDocumentSchema;
+use Tests\Support\MakesSignaturePng;
 use Tests\TestCase;
 
 /**
@@ -19,7 +19,7 @@ use Tests\TestCase;
  */
 class SignerApiTest extends TestCase
 {
-    use CreatesAuthSchema, CreatesDocumentSchema;
+    use CreatesAuthSchema, CreatesDocumentSchema, MakesSignaturePng;
 
     private User $user;
 
@@ -28,7 +28,6 @@ class SignerApiTest extends TestCase
         parent::setUp();
         $this->createAuthSchema();
         $this->createDocumentSchema();
-        Storage::fake('documents');
         $this->user = User::factory()->create();
     }
 
@@ -69,10 +68,8 @@ class SignerApiTest extends TestCase
         // Non-aktif tidak boleh ikut walau barisnya ada.
         Signer::factory()->role('komisaris')->create(['is_active' => false]);
 
-        // signature_ready hanya true bila aset tanda tangan benar-benar ada
-        // di disk documents.
-        Storage::disk('documents')->put('signatures/rina.png', 'PNG');
-        $komisaris->forceFill(['signature_asset_path' => 'signatures/rina.png'])->save();
+        // has_signature hanya true bila kolom aset base64 terisi (fase 1c).
+        $komisaris->forceFill(['signature_asset' => $this->signaturePngBase64()])->save();
 
         $response = $this->getJson('/api/v1/signers');
 
@@ -87,22 +84,24 @@ class SignerApiTest extends TestCase
             array_column($data, 'role'),
         );
 
-        // Shape identik elemen /me/signer (+ signature_ready cek disk).
+        // Shape identik elemen /me/signer (+ flag has_signature).
         $this->assertSame($direktur->id, $data[0]['id']);
         $this->assertSame('Dira Direktur', $data[0]['display_name']);
         $this->assertNull($data[0]['title']);
-        $this->assertFalse($data[0]['signature_ready']);
+        $this->assertFalse($data[0]['has_signature']);
 
         $this->assertSame($komisaris->id, $data[1]['id']);
         $this->assertSame('Komisaris Utama', $data[1]['title']);
-        $this->assertTrue($data[1]['signature_ready']);
+        $this->assertTrue($data[1]['has_signature']);
 
         // Sesama pemegang_saham urut id: gate signer dibuat lebih dulu.
         $this->assertSame('User Sendiri', $data[2]['display_name']);
         $this->assertSame($pemegang->id, $data[3]['id']);
         $this->assertSame('Boni Pemegang', $data[3]['display_name']);
 
-        // Path internal aset tanda tangan tidak dibocorkan.
+        // Path internal & isi aset tidak dibocorkan; field lama dihapus.
         $this->assertArrayNotHasKey('signature_asset_path', $data[1]);
+        $this->assertArrayNotHasKey('signature_asset', $data[1]);
+        $this->assertArrayNotHasKey('signature_ready', $data[1]);
     }
 }

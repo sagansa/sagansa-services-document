@@ -54,7 +54,10 @@
             width: 25mm;
             height: 25mm;
             border: 0.3mm solid #999999;
+            text-align: center;
+            vertical-align: middle;
         }
+        td.slot img.ttd-img { vertical-align: middle; }
         .signer-name { font-weight: bold; margin-top: 1.5mm; }
         .signer-title { font-size: 10pt; }
     </style>
@@ -123,7 +126,19 @@
                          satu tabel selalu sejajar, multiple signer berdampingan --}}
                     <tr>
                         @foreach($signers as $signer)
-                            <td class="slot"></td>
+                            @php($signature = $signer->signaturePreview())
+                            <td class="slot">
+                                @if($signature !== null)
+                                    {{-- Aset TTD tersimpan (fase 1c): rasio asli
+                                         dipertahankan di dalam kotak 25×25mm. --}}
+                                    <img
+                                        class="ttd-img"
+                                        src="{{ $signature['uri'] }}"
+                                        alt="Tanda tangan {{ $signer->display_name }}"
+                                        style="width: {{ $signature['width'] }}mm; height: {{ $signature['height'] }}mm;"
+                                    >
+                                @endif
+                            </td>
                         @endforeach
                     </tr>
                     <tr>

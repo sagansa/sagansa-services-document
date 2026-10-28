@@ -5,7 +5,8 @@ namespace App\Http\Controllers\Api\V1;
 use App\Http\Controllers\Controller;
 use App\Models\Signer;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Support\Facades\Storage;
+use Illuminate\Http\Response;
+use RuntimeException;
 
 /**
  * Daftar penandatangan internal (Task 20, wizard Buat Surat):
@@ -37,8 +38,11 @@ class SignerController extends Controller
     public function index(): JsonResponse
     {
         // Urut di PHP (bukan orderByRaw FIELD()) agar portabel antara
-        // MySQL produksi dan SQLite test.
+        // MySQL produksi dan SQLite test. Kolom aset (LONGTEXT) TIDAK
+        // ikut dimuat — hanya flag hasil selectRaw.
         $signers = Signer::query()
+            ->select(['id', 'role', 'display_name', 'title'])
+            ->selectRaw('(signature_asset IS NOT NULL) as has_signature')
             ->where('is_active', true)
             ->orderBy('id')
             ->get()
@@ -52,9 +56,43 @@ class SignerController extends Controller
                 'role' => $signer->role,
                 'display_name' => $signer->display_name,
                 'title' => $signer->title,
-                'signature_ready' => $signer->signature_asset_path !== null
-                    && Storage::disk('documents')->exists($signer->signature_asset_path),
+                'has_signature' => (bool) $signer->has_signature,
             ])->all(),
+        ]);
+    }
+
+    /**
+     * GET /signers/{id}/signature — bytes PNG aset tanda tangan penandatangan.
+     *
+     * Gate document.role sudah melindungi grup route. Aset kosong atau id
+     * tak dikenal → 404 netral; aset tidak dapat didekode / bukan PNG →
+     * fail-loud 500 (data korup, bukan kesalahan klien).
+     */
+    public function signature(string $id): Response
+    {
+        $signer = Signer::query()
+            ->select(['id', 'signature_asset'])
+            ->find($id);
+
+        if ($signer === null || blank($signer->signature_asset)) {
+            abort(404);
+        }
+
+        $binary = base64_decode((string) $signer->signature_asset, true);
+
+        if ($binary === false || ! str_starts_with($binary, "\x89PNG\r\n\x1a\n")) {
+            logger()->error('Aset tanda tangan penandatangan tidak valid.', [
+                'signer_id' => $signer->id,
+            ]);
+
+            throw new RuntimeException('Aset tanda tangan penandatangan tidak valid.');
+        }
+
+        return response($binary, 200, [
+            'Content-Type' => 'image/png',
+            'Content-Length' => (string) strlen($binary),
+            'Cache-Control' => 'private, max-age=300',
+            'X-Content-Type-Options' => 'nosniff',
         ]);
     }
 }
