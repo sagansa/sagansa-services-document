@@ -11,13 +11,11 @@ use App\Exceptions\ScanInvalidException;
 use App\Exceptions\SigningIncompleteException;
 use App\Http\Middleware\DocumentRoleGate;
 use Illuminate\Auth\AuthenticationException;
-use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Middleware\HandleCors;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\RateLimiter as RateLimiterFacade;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
@@ -27,17 +25,9 @@ return Application::configure(basePath: dirname(__DIR__))
         api: __DIR__.'/../routes/api.php',
         commands: __DIR__.'/../routes/console.php',
         // Health-check /up didefinisikan manual di routes/web.php (return 'ok').
-        then: function (): void {
-            // Rate limiter endpoint verifikasi publik (Task 17) — dipakai
-            // middleware `throttle:verify` di routes/web.php. Callback
-            // `then:` berjalan saat registrasi route (setelah provider
-            // ter-register) sehingga facade RateLimiter sudah bisa
-            // di-resolve; limit per menit per IP diambil dari config agar
-            // bisa disetel per lingkungan tanpa deploy ulang kode.
-            RateLimiterFacade::for('verify', fn (Request $r) => Limit::perMinute(
-                (int) config('document.verify_rate_limit'),
-            )->by($r->ip()));
-        },
+        // Rate limiter `verify` TIDAK boleh didaftarkan di callback `then:`:
+        // saat route di-cache di produksi, `then:` tidak pernah berjalan —
+        // registrasinya ada di AppServiceProvider::boot().
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->api(append: [
