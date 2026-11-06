@@ -30,6 +30,17 @@ return Application::configure(basePath: dirname(__DIR__))
         // registrasinya ada di AppServiceProvider::boot().
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Service ini API-only tanpa halaman login. Default Laravel 11
+        // `redirectGuestsTo(fn () => route('login'))` dieksekusi middleware
+        // Authenticate untuk request TANPA `Accept: application/json`
+        // (browser/aplikasi pemindai QR): `route('login')` melempar
+        // RouteNotFoundException DI DALAM middleware — sebelum
+        // AuthenticationException sempat dibangun — sehingga endpoint
+        // terproteksi menjawab 500 SERVER_ERROR alih-alih 401. Null-kan
+        // redirect guest: AuthenticationException tetap lahir dan
+        // renderable withExceptions menjawab 401 JSON untuk /api/*.
+        $middleware->redirectGuestsTo(fn () => null);
+
         $middleware->api(append: [
             HandleCors::class,
         ]);
