@@ -10,7 +10,16 @@ Route::get('/', function () {
 // Health-check service document (dipakai uptime monitor / reverse proxy).
 // Endpoint ini sengaja tidak memakai health bawaan Laravel supaya bisa
 // diakses tanpa dependensi apa pun dan mengembalikan teks "ok" saja.
-Route::get('/up', function () {
+// `?version=1` menampilkan penanda revisi API — cara cepat memastikan
+// server sudah menjalankan kode terbaru (mis. hapus draf 2026-11).
+Route::get('/up', function (Illuminate\Http\Request $request) {
+    if ($request->boolean('version')) {
+        return response()->json([
+            'delete_draft_reason_passthrough' => true,
+            'time' => now()->toIso8601String(),
+        ]);
+    }
+
     return 'ok';
 });
 
