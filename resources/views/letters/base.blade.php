@@ -53,7 +53,6 @@
         td.slot {
             width: 25mm;
             height: 25mm;
-            border: 0.3mm solid #999999;
             text-align: center;
             vertical-align: middle;
         }
@@ -84,11 +83,15 @@
                         <td class="head-sep">:</td>
                         <td>{{ $document->number }}</td>
                     </tr>
-                    <tr>
-                        <td class="head-label">Lampiran</td>
-                        <td class="head-sep">:</td>
-                        <td>{{ $attachmentsCount }} berkas</td>
-                    </tr>
+                    {{-- Baris lampiran hanya bila ada — "0 berkas" tidak
+                         perlu tampil (permintaan review wizard 2026-11). --}}
+                    @if($attachmentsCount > 0)
+                        <tr>
+                            <td class="head-label">Lampiran</td>
+                            <td class="head-sep">:</td>
+                            <td>{{ $attachmentsCount }} berkas</td>
+                        </tr>
+                    @endif
                     <tr>
                         <td class="head-label">Hal</td>
                         <td class="head-sep">:</td>

@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\AuditLog;
 use App\Models\Document;
 use App\Models\DocumentAttachment;
+use App\Models\LetterLink;
 use App\Models\LetterType;
 use App\Models\NumberSequence;
 use App\Models\Signer;
@@ -639,6 +640,60 @@ class DocumentApiTest extends TestCase
         $this->getJson('/api/v1/documents?q=Khusus Klien')
             ->assertOk()
             ->assertJsonPath('meta.total', 2);
+    }
+
+    #[Test]
+    public function destroy_deletes_draft_with_children_links_and_audit(): void
+    {
+        $this->signInAsSigner();
+        LetterType::factory()->create(['code' => 'ST']);
+
+        $documentId = $this->postJson('/api/v1/documents', [
+            'letter_type_code' => 'ST',
+            'unit' => 'DIR',
+            'subject' => 'Draf akan dihapus',
+            'date' => '2026-11-07',
+        ])->json('data.id');
+
+        // Lampiran + edge runutan menempel pada draft ini.
+        Storage::disk('documents')->put('2026/draft-att/attachment.txt', 'isi');
+        DocumentAttachment::factory()->create([
+            'document_id' => $documentId,
+            'path' => '2026/draft-att/attachment.txt',
+        ]);
+        LetterLink::factory()->create([
+            'parent_type' => 'document',
+            'parent_id' => $documentId,
+        ]);
+
+        $this->deleteJson("/api/v1/documents/{$documentId}")
+            ->assertOk()
+            ->assertJsonPath('data.id', $documentId);
+
+        $this->assertDatabaseMissing('documents', ['id' => $documentId], 'mysql_document');
+        $this->assertDatabaseMissing('document_attachments', ['document_id' => $documentId], 'mysql_document');
+        $this->assertDatabaseMissing('letter_links', ['parent_id' => $documentId], 'mysql_document');
+        // Jejak penghapusan tersisa di audit (document_id tanpa FK).
+        $this->assertDatabaseHas('audit_logs', [
+            'document_id' => $documentId,
+            'event' => 'deleted',
+        ], 'mysql_document');
+        // Berkas lampiran di disk ikut dibersihkan.
+        Storage::disk('documents')->assertMissing('2026/draft-att/attachment.txt');
+    }
+
+    #[Test]
+    public function destroy_rejects_non_draft_with_409(): void
+    {
+        $this->signInAsSigner();
+
+        $published = Document::factory()->status('terbit')->create();
+
+        $this->deleteJson("/api/v1/documents/{$published->id}")
+            ->assertStatus(409)
+            ->assertJsonPath('error.code', 'DOCUMENT_LOCKED');
+
+        $this->assertDatabaseHas('documents', ['id' => $published->id], 'mysql_document');
     }
 
     /**

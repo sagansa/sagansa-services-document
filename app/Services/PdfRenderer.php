@@ -111,7 +111,7 @@ class PdfRenderer
     }
 
     /**
-     * Footer "Halaman N dari M" di tiap halaman.
+     * Footer "Halaman N dari M" di tiap halaman — rata KANAN.
      *
      * Memakai callback end_document dompdf (setCallbacks) alih-alih
      * <script type="text/php"> inline di blade: script inline butuh
@@ -121,7 +121,8 @@ class PdfRenderer
      * halaman aktual, tanpa mengeval isi template.
      *
      * Koordinat CPDF: titik 0,0 kiri-atas halaman; A4 = 595x842 pt,
-     * jadi y=818 menempatkan footer ~8 mm dari tepi bawah.
+     * jadi y=818 menempatkan footer ~8 mm dari tepi bawah. Lebar teks
+     * dihitung agar x menempel margin kanan (595pt - 15mm ≈ 42.5pt).
      *
      * @return list<array{event: string, f: Closure}>
      */
@@ -132,7 +133,9 @@ class PdfRenderer
                 'event' => 'end_document',
                 'f' => function (int $pageNumber, int $pageCount, $canvas, $fontMetrics): void {
                     $font = $fontMetrics->getFont('helvetica', 'normal');
-                    $canvas->text(262, 818, "Halaman {$pageNumber} dari {$pageCount}", $font, 8, [0.35, 0.35, 0.35]);
+                    $text = "Halaman {$pageNumber} dari {$pageCount}";
+                    $textWidth = $canvas->get_text_width($text, $font, 8);
+                    $canvas->text(595 - 42.5 - $textWidth, 818, $text, $font, 8, [0.35, 0.35, 0.35]);
                 },
             ],
         ];

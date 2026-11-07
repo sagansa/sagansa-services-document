@@ -45,6 +45,9 @@ class AuditLogger
     /** Surat dibatalkan (void). */
     public const EVENT_VOIDED = 'voided';
 
+    /** Draf surat dihapus permanen (hanya status draft; bukan void). */
+    public const EVENT_DELETED = 'deleted';
+
     /** Surat diverifikasi via halaman publik. */
     public const EVENT_VERIFIED_PUBLIC = 'verified_public';
 

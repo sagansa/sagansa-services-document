@@ -343,6 +343,67 @@ class DocumentController extends Controller
     }
 
     /**
+     * DELETE /documents/{id} — hapus PERMANEN draf.
+     *
+     * Hanya status 'draft' (else 409 DOCUMENT_LOCKED): surat yang sudah
+     * diajukan tanda tangan / terbit / void punya jejak nomor, ttd, dan
+     * terbitan (mandat arsip 10 tahun) sehingga hanya bisa dibatalkan,
+     * bukan dihapus. FK *.document_id cascade membersihkan lampiran/
+     * issuance/signing request; edge letter_links node ini dihapus manual
+     * (polymorphic tanpa FK); berkas lampiran di disk dibersihkan
+     * best-effort setelah transaksi. Nomor yang sudah dipesan meninggalkan
+     * celah urutan — sama seperti void, diterima.
+     *
+     * Audit 'deleted' tetap dicatat SEBELUM baris dihapus (audit_logs
+     * tidak ber-FK ke documents — jejak penghapusan tersisa).
+     */
+    public function destroy(Request $request, string $id): JsonResponse
+    {
+        /** @var Document $document */
+        $document = Document::query()->with('attachments')->findOrFail($id);
+
+        if ($document->status !== 'draft') {
+            throw new DocumentLockedException(
+                "Surat berstatus '{$document->status}' tidak bisa dihapus; hanya draft yang bisa dihapus permanen. Surat yang sudah diajukan/diterbitkan dapat dibatalkan.",
+            );
+        }
+
+        $attachmentPaths = $document->attachments->pluck('path')->all();
+
+        DB::connection($document->getConnectionName())->transaction(function () use ($document, $request): void {
+            $this->audit->log(
+                $document,
+                AuditLogger::EVENT_DELETED,
+                (int) $request->user()->id,
+                ['status' => $document->status],
+                $request->ip(),
+                $this->userAgent($request),
+            );
+
+            // Edge runutan node ini (sebagai induk maupun anak) —
+            // letter_links polymorphic tanpa FK, bersihkan manual.
+            DB::connection($document->getConnectionName())->table('letter_links')
+                ->where(function ($query) use ($document): void {
+                    $query->where(fn ($q) => $q->where('parent_type', 'document')->where('parent_id', $document->id))
+                        ->orWhere(fn ($q) => $q->where('child_type', 'document')->where('child_id', $document->id));
+                })
+                ->delete();
+
+            // Lampiran/issuance/signing request ikut cascade FK document_id.
+            $document->delete();
+        });
+
+        foreach ($attachmentPaths as $path) {
+            Storage::disk('documents')->delete($path);
+        }
+
+        return response()->json([
+            'success' => true,
+            'data' => ['id' => $document->id],
+        ]);
+    }
+
+    /**
      * GET /me/signer — peran signer milik user login (gate menu Flutter,
      * Task 19). signature_ready = aset tanda tangan benar-benar ada di disk.
      */

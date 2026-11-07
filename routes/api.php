@@ -30,6 +30,8 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'document.role'])->group(functi
     Route::post('/documents', [DocumentController::class, 'store']);
     Route::get('/documents/{id}', [DocumentController::class, 'show'])->whereUuid('id');
     Route::patch('/documents/{id}', [DocumentController::class, 'update'])->whereUuid('id');
+    // Hapus permanen draf (hanya status draft; guard di controller).
+    Route::delete('/documents/{id}', [DocumentController::class, 'destroy'])->whereUuid('id');
     Route::post('/documents/{id}/numbering/reserve', [DocumentController::class, 'reserveNumber'])->whereUuid('id');
 
     // Lampiran surat (Task 14) — hanya draft|menunggu_ttd di controller.
