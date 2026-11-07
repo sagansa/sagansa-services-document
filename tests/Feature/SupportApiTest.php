@@ -336,6 +336,60 @@ class SupportApiTest extends TestCase
     }
 
     #[Test]
+    public function letter_types_can_be_created_manually_with_generated_code(): void
+    {
+        $this->signInAsSigner();
+
+        $response = $this->postJson('/api/v1/letter-types', [
+            'name' => 'Surat Tanggapan',
+        ]);
+
+        $response->assertCreated()
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('data.name', 'Surat Tanggapan')
+            ->assertJsonPath('data.code', 'ST'); // inisial dua kata
+
+        $this->assertDatabaseHas('letter_types', [
+            'code' => 'ST',
+            'name' => 'Surat Tanggapan',
+            'is_active' => true,
+        ], 'mysql_document');
+
+        // Kode bentrok → akhiran angka otomatis.
+        $second = $this->postJson('/api/v1/letter-types', [
+            'name' => 'Surat Teguran',
+        ]);
+        $second->assertCreated();
+        $this->assertSame('ST1', $second->json('data.code'));
+
+        // Jenis baru langsung tersedia di wizard.
+        $this->getJson('/api/v1/letter-types')
+            ->assertOk()
+            ->assertJsonFragment(['code' => 'ST', 'name' => 'Surat Tanggapan']);
+    }
+
+    #[Test]
+    public function letter_types_manual_creation_validates_code(): void
+    {
+        $this->signInAsSigner();
+
+        $this->postJson('/api/v1/letter-types', [
+            'name' => 'Surat Tanggapan',
+            'code' => 'stg',
+        ])->assertStatus(422)->assertJsonPath('error.code', 'VALIDATION_ERROR');
+
+        LetterType::factory()->create(['code' => 'STG']);
+
+        $this->postJson('/api/v1/letter-types', [
+            'name' => 'Surat Tanggapan Kedua',
+            'code' => 'STG',
+        ])->assertStatus(422)->assertJsonPath('error.code', 'VALIDATION_ERROR');
+
+        $this->postJson('/api/v1/letter-types', ['name' => ''])
+            ->assertStatus(422)->assertJsonPath('error.code', 'VALIDATION_ERROR');
+    }
+
+    #[Test]
     public function templates_filter_by_letter_type_with_default_first(): void
     {
         $this->signInAsSigner();

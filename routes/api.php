@@ -53,6 +53,9 @@ Route::prefix('v1')->middleware(['auth:sanctum', 'document.role'])->group(functi
 
     // Wizard (Task 14): jenis surat aktif + template per jenis.
     Route::get('/letter-types', [LetterTypeController::class, 'index']);
+    // Jenis surat manual (mis. Surat Tanggapan untuk balasan SP2DK/instansi
+    // lain) — ditambahkan langsung dari wizard.
+    Route::post('/letter-types', [LetterTypeController::class, 'store']);
     Route::get('/templates', [TemplateController::class, 'index']);
 
     Route::get('/me/signer', [DocumentController::class, 'meSigner']);
