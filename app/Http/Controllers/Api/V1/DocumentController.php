@@ -13,6 +13,7 @@ use App\Services\AuditLogger;
 use App\Services\LetterLinkService;
 use App\Services\NumberingService;
 use Carbon\CarbonImmutable;
+use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -371,35 +372,60 @@ class DocumentController extends Controller
 
         $attachmentPaths = $document->attachments->pluck('path')->all();
 
-        $connection = DB::connection($document->getConnectionName());
+        try {
+            $connection = DB::connection($document->getConnectionName());
 
-        $connection->transaction(function () use ($connection, $document, $request): void {
-            $this->audit->log(
-                $document,
-                AuditLogger::EVENT_DELETED,
-                (int) $request->user()->id,
-                ['status' => $document->status],
-                $request->ip(),
-                $this->userAgent($request),
-            );
+            $connection->transaction(function () use ($connection, $document, $request): void {
+                $this->audit->log(
+                    $document,
+                    AuditLogger::EVENT_DELETED,
+                    (int) $request->user()->id,
+                    ['status' => $document->status],
+                    $request->ip(),
+                    $this->userAgent($request),
+                );
 
-            // Edge runutan node ini (induk maupun anak) — letter_links
-            // polymorphic tanpa FK, bersihkan manual. GUARD hasTable:
-            // server dengan DB yang belum menjalankan migration fase 1b
-            // (incoming letter) tidak punya tabel ini — draf berdiri
-            // sendiri pasti tanpa edge, jadi aman dilewati daripada 500.
-            if (Schema::connection($document->getConnectionName())->hasTable('letter_links')) {
-                $connection->table('letter_links')
-                    ->where(function ($query) use ($document): void {
-                        $query->where(fn ($q) => $q->where('parent_type', 'document')->where('parent_id', $document->id))
-                            ->orWhere(fn ($q) => $q->where('child_type', 'document')->where('child_id', $document->id));
-                    })
-                    ->delete();
+                // Edge runutan node ini (induk maupun anak) — letter_links
+                // polymorphic tanpa FK, bersihkan manual. GUARD hasTable:
+                // server dengan DB yang belum menjalankan migration fase 1b
+                // tidak punya tabel ini — draf berdiri sendiri pasti tanpa
+                // edge, jadi aman dilewati daripada 500.
+                if (Schema::connection($document->getConnectionName())->hasTable('letter_links')) {
+                    $connection->table('letter_links')
+                        ->where(function ($query) use ($document): void {
+                            $query->where(fn ($q) => $q->where('parent_type', 'document')->where('parent_id', $document->id))
+                                ->orWhere(fn ($q) => $q->where('child_type', 'document')->where('child_id', $document->id));
+                        })
+                        ->delete();
+                }
+
+                // Lampiran/issuance/signing request ikut cascade FK
+                // document_id.
+                $document->delete();
+            });
+        } catch (Throwable $e) {
+            report($e);
+
+            // Fallback MINIMAL: audit + hapus baris saja — bila jalur
+            // lengkap tersandung (tabel/kolom bersyarat yang belum ada di
+            // DB server), draf tetap bisa dihapus.
+            try {
+                $document->delete();
+            } catch (Throwable $fatal) {
+                report($fatal);
+
+                // Alasan asli DITERUSKAN ke klien (envelope error) —
+                // snackbar aplikasi menampilkan sebab pasti, bukan 500
+                // buta; pelacakan tak butuh akses ke laravel.log.
+                $reason = Str::of($e->getMessage())->limit(180);
+                throw new HttpResponseException(response()->json([
+                    'error' => [
+                        'code' => 'DELETE_FAILED',
+                        'message' => "Server gagal menghapus draf: {$reason}",
+                    ],
+                ], 500));
             }
-
-            // Lampiran/issuance/signing request ikut cascade FK document_id.
-            $document->delete();
-        });
+        }
 
         // Berkas lampiran di disk — best-effort: kegagalan disk tidak
         // boleh mengembalikan 500 setelah baris DB terhapus.
