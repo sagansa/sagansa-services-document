@@ -36,12 +36,26 @@
         /* ---------- Isi surat ---------- */
         .body { text-align: justify; }
 
+        /* ---------- Blok tujuan (Yth.) & cap rahasia ---------- */
+        table.addressee { width: 100%; border-collapse: collapse; margin-bottom: 5mm; }
+        td.addressee-label { width: 10mm; vertical-align: top; }
+        .stamp-rahasia {
+            text-align: center;
+            font-size: 12pt;
+            font-weight: bold;
+            letter-spacing: 3pt;
+            color: #b91c1c;
+            border: 0.6mm double #b91c1c;
+            width: 42mm;
+            padding: 1mm 0;
+            margin: 0 0 4mm 0;
+        }
+
         /* ---------- Blok tanda tangan ---------- */
         table.ttd { width: 100%; border-collapse: collapse; margin-top: 10mm; }
         td.ttd-qr { width: 40mm; vertical-align: top; }
         td.ttd-gap { width: 35mm; }
         td.ttd-signers { width: 105mm; vertical-align: top; }
-        .ttd-city { text-align: right; margin-bottom: 2mm; }
         .qr-img {
             width: 25mm;
             height: 25mm;
@@ -107,6 +121,27 @@
         </tr>
     </table>
 
+    {{-- ================= TUJUAN (Yth.) + CAP RAHASIA ================= --}}
+    {{-- Penerima umum dari metadata (semua jenis): dicetak sebagai blok
+         "Yth." di atas isi; bila tidak diisi, blok dilewati. Cap RAHASIA
+         hanya untuk classification rahasia. --}}
+    @php($recipient = $document->metadata['recipient'] ?? null)
+    @if(is_array($recipient))
+        <table class="addressee">
+            <tr>
+                <td class="addressee-label">Yth.</td>
+                <td>
+                    {{ $recipient['name'] ?? '' }}<br>
+                    @if(!empty($recipient['title'])){{ $recipient['title'] }}<br>@endif
+                    @if(!empty($recipient['address'])){{ $recipient['address'] }}@endif
+                </td>
+            </tr>
+        </table>
+    @endif
+    @if($document->classification === 'rahasia')
+        <div class="stamp-rahasia">RAHASIA</div>
+    @endif
+
     {{-- ================= ISI SURAT ================= --}}
     {{-- Raw: konten dari editor internal aplikasi sendiri --}}
     <div class="body">
@@ -114,7 +149,7 @@
     </div>
 
     {{-- ================= BLOK TANDA TANGAN ================= --}}
-    {{-- TODO: ganti kota placeholder dengan kota domisili resmi --}}
+    {{-- Tanggal tidak diulang di sini — sudah ada di kepala surat. --}}
     <table class="ttd">
         <tr>
             <td class="ttd-qr">
@@ -123,7 +158,6 @@
             </td>
             <td class="ttd-gap"></td>
             <td class="ttd-signers">
-                <div class="ttd-city">Jakarta, {{ $document->date->locale('id')->translatedFormat('d F Y') }}</div>
                 <table class="signers">
                     {{-- Kotak TTD baris atas, nama+jabatan baris bawah: kolom
                          satu tabel selalu sejajar, multiple signer berdampingan --}}
