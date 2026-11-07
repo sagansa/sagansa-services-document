@@ -13,6 +13,7 @@ use App\Models\SigningRequest;
 use App\Models\User;
 use App\Services\AuditLogger;
 use App\Services\Finalizer;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\Sanctum;
@@ -680,6 +681,31 @@ class DocumentApiTest extends TestCase
         ], 'mysql_document');
         // Berkas lampiran di disk ikut dibersihkan.
         Storage::disk('documents')->assertMissing('2026/draft-att/attachment.txt');
+    }
+
+    #[Test]
+    public function destroy_survives_missing_letter_links_table(): void
+    {
+        // Server dengan DB yang belum menjalankan migration fase 1b
+        // (incoming letter) tidak punya letter_links — hapus draf tetap
+        // sukses, bukan 500 (kasus nyata produksi 2026-11-08).
+        $this->signInAsSigner();
+        LetterType::factory()->create(['code' => 'ST']);
+
+        $documentId = $this->postJson('/api/v1/documents', [
+            'letter_type_code' => 'ST',
+            'unit' => 'DIR',
+            'subject' => 'Draf tanpa letter_links',
+            'date' => '2026-11-08',
+        ])->json('data.id');
+
+        Schema::connection('mysql_document')->dropIfExists('letter_links');
+
+        $this->deleteJson("/api/v1/documents/{$documentId}")
+            ->assertOk()
+            ->assertJsonPath('data.id', $documentId);
+
+        $this->assertDatabaseMissing('documents', ['id' => $documentId], 'mysql_document');
     }
 
     #[Test]

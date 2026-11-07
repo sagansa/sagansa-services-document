@@ -16,6 +16,7 @@ use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
@@ -370,7 +371,9 @@ class DocumentController extends Controller
 
         $attachmentPaths = $document->attachments->pluck('path')->all();
 
-        DB::connection($document->getConnectionName())->transaction(function () use ($document, $request): void {
+        $connection = DB::connection($document->getConnectionName());
+
+        $connection->transaction(function () use ($connection, $document, $request): void {
             $this->audit->log(
                 $document,
                 AuditLogger::EVENT_DELETED,
@@ -380,21 +383,36 @@ class DocumentController extends Controller
                 $this->userAgent($request),
             );
 
-            // Edge runutan node ini (sebagai induk maupun anak) —
-            // letter_links polymorphic tanpa FK, bersihkan manual.
-            DB::connection($document->getConnectionName())->table('letter_links')
-                ->where(function ($query) use ($document): void {
-                    $query->where(fn ($q) => $q->where('parent_type', 'document')->where('parent_id', $document->id))
-                        ->orWhere(fn ($q) => $q->where('child_type', 'document')->where('child_id', $document->id));
-                })
-                ->delete();
+            // Edge runutan node ini (induk maupun anak) — letter_links
+            // polymorphic tanpa FK, bersihkan manual. GUARD hasTable:
+            // server dengan DB yang belum menjalankan migration fase 1b
+            // (incoming letter) tidak punya tabel ini — draf berdiri
+            // sendiri pasti tanpa edge, jadi aman dilewati daripada 500.
+            if (Schema::connection($document->getConnectionName())->hasTable('letter_links')) {
+                $connection->table('letter_links')
+                    ->where(function ($query) use ($document): void {
+                        $query->where(fn ($q) => $q->where('parent_type', 'document')->where('parent_id', $document->id))
+                            ->orWhere(fn ($q) => $q->where('child_type', 'document')->where('child_id', $document->id));
+                    })
+                    ->delete();
+            }
 
             // Lampiran/issuance/signing request ikut cascade FK document_id.
             $document->delete();
         });
 
+        // Berkas lampiran di disk — best-effort: kegagalan disk tidak
+        // boleh mengembalikan 500 setelah baris DB terhapus.
         foreach ($attachmentPaths as $path) {
-            Storage::disk('documents')->delete($path);
+            try {
+                Storage::disk('documents')->delete($path);
+            } catch (Throwable $e) {
+                logger()->warning('Gagal menghapus berkas lampiran draf di disk.', [
+                    'document_id' => $document->id,
+                    'path' => $path,
+                    'error' => $e->getMessage(),
+                ]);
+            }
         }
 
         return response()->json([
