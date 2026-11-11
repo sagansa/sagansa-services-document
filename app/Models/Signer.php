@@ -237,7 +237,6 @@ class Signer extends Model
         ob_start();
         imagepng($image);
         $png = (string) ob_get_clean();
-        imagedestroy($image);
 
         if (! str_starts_with($png, self::PNG_MAGIC)) {
             return null;
