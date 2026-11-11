@@ -42,17 +42,32 @@ Setup auth meniru persis pola `services/img`:
 | `GET` | `/api/v1/letter-types` | Jenis surat aktif (wizard Buat Surat). |
 | `GET` | `/api/v1/templates` | Template per jenis surat (default duluan). |
 | `GET` | `/api/v1/me/signer` | Profil signer saya (status gate, `has_signature`). |
-| `GET` | `/api/v1/signers` | Direktori signer aktif (pilih signer komisaris milik user lain); tiap elemen memuat `has_signature` — kolom base64 aset TIDAK ikut di response. |
-| `GET` | `/api/v1/signers/{id}/signature` | Bytes PNG aset tanda tangan tersimpan (gate role; 404 bila kosong, 500 bila aset korup). Dipakai sumber overlay Mode B mobile. |
+| `GET` | `/api/v1/signers` | Direktori signer aktif (pilih signer komisaris milik user lain); tiap elemen memuat `has_signature` — kolom aset TIDAK ikut di response. |
+| `GET` | `/api/v1/signers/{id}/signature` | Bytes PNG aset tanda tangan tersimpan (gate role; 404 bila tidak ada aset, 500 bila aset ada tapi tidak terbaca). Dipakai sumber overlay Mode B mobile. |
 | `POST` | `/api/v1/documents/{id}/pre-final` | Pratinjau PDF `{mode:'a'\|'b', pdf_base64?, overlays?}` → URL signed 15 menit. |
 | `POST` | `/api/v1/documents/{id}/finalize` | Terbitkan `{method:'a'\|'b'\|'c'\|'d'}` (a render, b stempel, c PDF ttd resmi, d foto multipart `images[]`). |
 | `POST` | `/api/v1/documents/{id}/reissue` | Terbitkan ulang surat terbit (`method` + `note` wajib; issuance lama dinonaktifkan). |
 | `POST` | `/api/v1/documents/{id}/revoke` | Cabut — hanya jenis KUA + status terbit (`{reason, revoked_at}`). |
 | `POST` | `/api/v1/documents/{id}/void` | Batalkan — draft\|menunggu_ttd\|terbit (`{reason}`). |
 
-### Aset tanda tangan tersimpan (fase 1c)
+### Aset tanda tangan tersimpan (fase 1c + penyimpanan img service)
 
-`signers.signature_asset` menyimpan PNG base64 (tanpa prefiks data-URI) yang diunggah admin lewat apps/admin. Endpoint list (`/signers`, `/me/signer`) hanya mengirim flag `has_signature`; kolom besar tidak ikut di-query. Render PDF Mode A (`PdfRenderer`) menaruh aset di slot TTD blok penandatangan (rasio asli, maks 23mm dalam kotak 25mm) — aset kosong atau korup kembali ke kotak placeholder, aset korup dicatat `warning` (fail-soft). `GET /signers/{id}/signature` menyajikan bytes PNG untuk overlay Mode B (fail-loud 500 bila korup).
+Aset diunggah admin lewat `apps/admin` langsung ke **img service (`img.sagansa.id`)** — sesuai
+`doc/prd/design.md` pola `services/img` — lalu dirujuk oleh `signers.signature_asset_path`
+(path relatif, mis. `images/Signer/<uuid>.webp`). Kolom `signature_asset` (base64 PNG) tetap ada
+hanya sebagai **fallback baca** untuk baris lama; tidak lagi ditulis.
+
+Read memakai `GET {IMG_SERVICE_URL}/storage/{path}` (publik tanpa token — `config/services.php`
+→ `image.service_url`). Karena img service selalu re-encode unggahan ke WebP,
+`Signer::signatureBinary()` mengonversinya kembali ke PNG agar overlay mobile
+(`OverlayImageData.fromPngBytes` mensyaratkan magic byte PNG), data URI blade, dan endpoint bytes
+tetap PNG.
+
+Endpoint list (`/signers`, `/me/signer`) hanya mengirim flag `has_signature` (path **atau** base64
+terisi); kolom aset tidak ikut di-query. Render PDF Mode A (`PdfRenderer`) menaruh aset di slot TTD
+blok penandatangan (rasio asli, maks 23mm dalam kotak 25mm) — aset kosong/tidak terbaca kembali ke
+kotak placeholder dan dicatat `warning` (fail-soft). `GET /signers/{id}/signature` menyajikan bytes
+PNG (404 bila tidak ada aset, fail-loud 500 bila aset ada tapi tidak terbaca).
 
 ### Unduhan pra-final (URL signed = otorisasi)
 

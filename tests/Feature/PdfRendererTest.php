@@ -7,6 +7,7 @@ use App\Models\DocumentAttachment;
 use App\Models\Signer;
 use App\Models\SigningRequest;
 use App\Services\PdfRenderer;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Tests\Support\CreatesDocumentSchema;
 use Tests\Support\DecodesPdfStreams;
@@ -185,6 +186,69 @@ class PdfRendererTest extends TestCase
     }
 
     #[Test]
+    public function render_embeds_signature_stored_in_image_service(): void
+    {
+        Http::fake([
+            'https://img.sagansa.id/storage/*' => Http::response($this->signaturePngBytes(), 200),
+        ]);
+
+        $plain = $this->makeLetter();
+        $baselineImages = substr_count($this->renderer->render($plain), '/Subtype /Image');
+
+        $signer = Signer::factory()->role('direktur')->create([
+            'display_name' => 'Andi Wijaya',
+            'signature_asset_path' => 'images/Signer/ttd.webp',
+            'signature_asset' => null,
+        ]);
+        $document = $this->makeLetter(['created_by' => $signer->user_id]);
+
+        $pdf = $this->renderer->render($document);
+
+        $this->assertSame('%PDF', substr($pdf, 0, 4));
+        $this->assertGreaterThan(
+            $baselineImages,
+            substr_count($pdf, '/Subtype /Image'),
+            'aset TTD dari img service harus menjadi image XObject tambahan',
+        );
+        $this->assertStringContainsString('Andi Wijaya', $this->decodedStreams($pdf));
+
+        Http::assertSent(fn ($request): bool => str_contains($request->url(), '/storage/images/Signer/ttd.webp'));
+    }
+
+    #[Test]
+    public function render_falls_back_to_placeholder_when_image_service_asset_is_missing(): void
+    {
+        Log::spy();
+        Http::fake([
+            'https://img.sagansa.id/storage/*' => Http::response('', 404),
+        ]);
+
+        $plain = $this->makeLetter();
+        $baselineImages = substr_count($this->renderer->render($plain), '/Subtype /Image');
+
+        $signer = Signer::factory()->role('direktur')->create([
+            'display_name' => 'Andi Wijaya',
+            'signature_asset_path' => 'images/Signer/hilang.webp',
+            'signature_asset' => null,
+        ]);
+        $document = $this->makeLetter(['created_by' => $signer->user_id]);
+
+        $pdf = $this->renderer->render($document);
+
+        // Fail-soft: PDF tetap terbit, slot kembali jadi kotak placeholder.
+        $this->assertSame('%PDF', substr($pdf, 0, 4));
+        $this->assertSame(
+            $baselineImages,
+            substr_count($pdf, '/Subtype /Image'),
+            'aset tak terbaca tidak boleh menambah image XObject',
+        );
+
+        Log::shouldHaveReceived('warning')
+            ->withArgs(fn (string $message, array $context = []): bool => str_contains($message, 'tidak dapat dirender')
+                && ($context['signer_id'] ?? null) === $signer->id);
+    }
+
+    #[Test]
     public function render_falls_back_to_placeholder_and_logs_warning_for_corrupt_asset(): void
     {
         Log::spy();
@@ -217,7 +281,7 @@ class PdfRendererTest extends TestCase
      * Dokumen surat standar untuk test dengan nomor surat brief
      * 001/ST/DIR/X/2026 dan body yang menyebut nomor tersebut.
      *
-     * @param array<string, mixed> $overrides
+     * @param  array<string, mixed>  $overrides
      */
     private function makeLetter(array $overrides = []): Document
     {

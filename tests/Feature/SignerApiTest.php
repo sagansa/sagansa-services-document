@@ -68,7 +68,8 @@ class SignerApiTest extends TestCase
         // Non-aktif tidak boleh ikut walau barisnya ada.
         Signer::factory()->role('komisaris')->create(['is_active' => false]);
 
-        // has_signature hanya true bila kolom aset base64 terisi (fase 1c).
+        // has_signature hanya true bila aset ada (path img service ATAU
+        // base64 legacy — fase 1c).
         $komisaris->forceFill(['signature_asset' => $this->signaturePngBase64()])->save();
 
         $response = $this->getJson('/api/v1/signers');
@@ -103,5 +104,36 @@ class SignerApiTest extends TestCase
         $this->assertArrayNotHasKey('signature_asset_path', $data[1]);
         $this->assertArrayNotHasKey('signature_asset', $data[1]);
         $this->assertArrayNotHasKey('signature_ready', $data[1]);
+    }
+
+    #[Test]
+    public function has_signature_is_true_for_image_service_path(): void
+    {
+        Sanctum::actingAs($this->user);
+
+        // Baris gate milik user login.
+        Signer::factory()->role('pemegang_saham')->create(['user_id' => $this->user->id]);
+
+        // Aset tersimpan sebagai path img service (jalur utama), bukan base64.
+        Signer::factory()->role('komisaris')->create([
+            'signature_asset_path' => 'images/Signer/ttd.webp',
+            'signature_asset' => null,
+        ]);
+
+        $response = $this->getJson('/api/v1/signers');
+
+        $response->assertOk();
+
+        $data = $response->json('data');
+        $this->assertCount(2, $data);
+
+        // Urutan: komisaris (1) lalu pemegang_saham (2).
+        $this->assertSame('komisaris', $data[0]['role']);
+        $this->assertTrue($data[0]['has_signature']);
+        $this->assertFalse($data[1]['has_signature']);
+
+        // Path internal tidak dibocorkan ke klien.
+        $this->assertArrayNotHasKey('signature_asset_path', $data[0]);
+        $this->assertArrayNotHasKey('signature_asset', $data[0]);
     }
 }

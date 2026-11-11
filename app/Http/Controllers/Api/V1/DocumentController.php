@@ -453,10 +453,11 @@ class DocumentController extends Controller
      */
     public function meSigner(Request $request): JsonResponse
     {
-        // Kolom aset (LONGTEXT) tidak dimuat di list — flag via selectRaw.
+        // Kolom aset tidak dimuat di list — flag via selectRaw (path img
+        // service ATAU base64 legacy).
         $signers = Signer::query()
             ->select(['id', 'role', 'display_name', 'title'])
-            ->selectRaw('(signature_asset IS NOT NULL) as has_signature')
+            ->selectRaw('(signature_asset IS NOT NULL OR signature_asset_path IS NOT NULL) as has_signature')
             ->where('user_id', $request->user()->id)
             ->where('is_active', true)
             ->orderBy('id')

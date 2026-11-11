@@ -18,9 +18,7 @@ use Illuminate\Support\Collection;
  */
 class PdfRenderer
 {
-    public function __construct(private readonly QrBuilder $qrBuilder = new QrBuilder)
-    {
-    }
+    public function __construct(private readonly QrBuilder $qrBuilder = new QrBuilder) {}
 
     /**
      * Render surat menjadi binary PDF (diawali %PDF).
@@ -58,7 +56,7 @@ class PdfRenderer
     private function signersFor(Document $document): Collection
     {
         $creatorSigners = Signer::query()
-            ->select(['id', 'role', 'display_name', 'title', 'signature_asset'])
+            ->select(['id', 'role', 'display_name', 'title', 'signature_asset_path', 'signature_asset'])
             ->where('user_id', $document->created_by)
             ->where('is_active', true)
             ->get();
@@ -68,7 +66,7 @@ class PdfRenderer
             ?? $this->genericDirektur();
 
         $approved = Signer::query()
-            ->select(['id', 'role', 'display_name', 'title', 'signature_asset'])
+            ->select(['id', 'role', 'display_name', 'title', 'signature_asset_path', 'signature_asset'])
             ->whereHas('signingRequests', function ($query) use ($document): void {
                 $query->where('document_id', $document->id)
                     ->where('status', 'disetujui');
@@ -88,7 +86,7 @@ class PdfRenderer
     private function warnCorruptSignatureAssets(Collection $signers): void
     {
         foreach ($signers as $signer) {
-            if (filled($signer->signature_asset) && $signer->signaturePreview() === null) {
+            if ($signer->hasSignatureAsset() && $signer->signaturePreview() === null) {
                 logger()->warning('Aset tanda tangan penandatangan tidak dapat dirender — memakai placeholder.', [
                     'signer_id' => $signer->id,
                 ]);

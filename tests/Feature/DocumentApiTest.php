@@ -574,6 +574,29 @@ class DocumentApiTest extends TestCase
     }
 
     #[Test]
+    public function me_signer_flags_signature_stored_in_image_service(): void
+    {
+        Sanctum::actingAs($this->user);
+
+        Signer::factory()->create([
+            'user_id' => $this->user->id,
+            'role' => 'direktur',
+            'display_name' => 'Budi',
+            'signature_asset_path' => 'images/Signer/ttd.webp',
+            'signature_asset' => null,
+        ]);
+
+        $signers = $this->getJson('/api/v1/me/signer')
+            ->assertOk()
+            ->json('data.signers');
+
+        $this->assertCount(1, $signers);
+        $this->assertTrue($signers[0]['has_signature']);
+        $this->assertArrayNotHasKey('signature_asset_path', $signers[0]);
+        $this->assertArrayNotHasKey('signature_asset', $signers[0]);
+    }
+
+    #[Test]
     public function index_paginates_and_filters(): void
     {
         $this->signInAsSigner();

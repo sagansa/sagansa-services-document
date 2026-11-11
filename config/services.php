@@ -35,4 +35,11 @@ return [
         ],
     ],
 
+    // Image service (img.sagansa.id) — penyimpanan aset gambar lintas
+    // service (doc/prd/design.md, pola services/img). Read bersifat publik:
+    // https://img.sagansa.id/storage/{path} tanpa token.
+    'image' => [
+        'service_url' => env('IMG_SERVICE_URL', 'https://img.sagansa.id'),
+    ],
+
 ];

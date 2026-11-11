@@ -4,6 +4,7 @@ namespace Tests\Feature;
 
 use App\Models\Signer;
 use App\Models\User;
+use Illuminate\Support\Facades\Http;
 use Laravel\Sanctum\Sanctum;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\Support\CreatesAuthSchema;
@@ -16,9 +17,13 @@ use Tests\TestCase;
  *
  *   GET /api/v1/signers/{id}/signature — bytes PNG untuk overlay Mode B.
  *
- * Gate document.role melindungi grup route (bukan signer → 403). Aset
- * kosong atau id tak dikenal → 404 netral; aset korup → 500 (fail-loud:
- * data rusak adalah kesalahan server, bukan klien).
+ * Sumber baca: img service (`signature_asset_path`, selalu WebP → dikonversi
+ * ke PNG) dengan fallback base64 legacy (`signature_asset`).
+ *
+ * Gate document.role melindungi grup route (bukan signer → 403). Tanpa aset
+ * sama sekali atau id tak dikenal → 404 netral; aset ada tapi tidak terbaca
+ * → 500 (fail-loud: data rusak / img service tak terjangkau adalah kesalahan
+ * server, bukan klien).
  */
 class SignerSignatureTest extends TestCase
 {
@@ -108,6 +113,70 @@ class SignerSignatureTest extends TestCase
     {
         $signer = Signer::factory()->create([
             'signature_asset' => '%%% bukan base64 %%%',
+        ]);
+
+        $this->getJson("/api/v1/signers/{$signer->id}/signature")
+            ->assertStatus(500)
+            ->assertJsonPath('error.code', 'SERVER_ERROR');
+    }
+
+    #[Test]
+    public function it_converts_image_service_webp_asset_to_png_bytes(): void
+    {
+        Http::fake([
+            'https://img.sagansa.id/storage/*' => Http::response($this->signatureWebpBytes(), 200),
+        ]);
+
+        $signer = Signer::factory()->create([
+            'signature_asset_path' => 'images/Signer/ttd.webp',
+            'signature_asset' => null,
+        ]);
+
+        $response = $this->get("/api/v1/signers/{$signer->id}/signature");
+
+        $response->assertOk();
+        $this->assertSame('image/png', $response->headers->get('Content-Type'));
+
+        $body = (string) $response->getContent();
+        $this->assertSame("\x89PNG\r\n\x1a\n", substr($body, 0, 8), 'img service menyimpan WebP — wajib dikonversi ke PNG');
+
+        $size = getimagesizefromstring($body);
+        $this->assertNotFalse($size);
+        $this->assertSame(120, $size[0]);
+        $this->assertSame(40, $size[1]);
+
+        Http::assertSent(fn ($request): bool => str_contains($request->url(), '/storage/images/Signer/ttd.webp'));
+    }
+
+    #[Test]
+    public function it_falls_back_to_legacy_base64_when_image_service_is_unreachable(): void
+    {
+        Http::fake([
+            'https://img.sagansa.id/storage/*' => Http::response('', 404),
+        ]);
+
+        $base64 = $this->signaturePngBase64();
+        $signer = Signer::factory()->create([
+            'signature_asset_path' => 'images/Signer/hilang.webp',
+            'signature_asset' => $base64,
+        ]);
+
+        $response = $this->get("/api/v1/signers/{$signer->id}/signature");
+
+        $response->assertOk();
+        $this->assertSame(base64_decode($base64, true), $response->getContent());
+    }
+
+    #[Test]
+    public function it_fails_loudly_when_image_service_asset_cannot_be_read(): void
+    {
+        Http::fake([
+            'https://img.sagansa.id/storage/*' => Http::response('', 404),
+        ]);
+
+        $signer = Signer::factory()->create([
+            'signature_asset_path' => 'images/Signer/hilang.webp',
+            'signature_asset' => null,
         ]);
 
         $this->getJson("/api/v1/signers/{$signer->id}/signature")

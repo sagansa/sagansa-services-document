@@ -38,11 +38,11 @@ class SignerController extends Controller
     public function index(): JsonResponse
     {
         // Urut di PHP (bukan orderByRaw FIELD()) agar portabel antara
-        // MySQL produksi dan SQLite test. Kolom aset (LONGTEXT) TIDAK
-        // ikut dimuat — hanya flag hasil selectRaw.
+        // MySQL produksi dan SQLite test. Kolom aset tidak ikut dimuat —
+        // hanya flag hasil selectRaw (path img service ATAU base64 legacy).
         $signers = Signer::query()
             ->select(['id', 'role', 'display_name', 'title'])
-            ->selectRaw('(signature_asset IS NOT NULL) as has_signature')
+            ->selectRaw('(signature_asset IS NOT NULL OR signature_asset_path IS NOT NULL) as has_signature')
             ->where('is_active', true)
             ->orderBy('id')
             ->get()
@@ -64,25 +64,28 @@ class SignerController extends Controller
     /**
      * GET /signers/{id}/signature — bytes PNG aset tanda tangan penandatangan.
      *
-     * Gate document.role sudah melindungi grup route. Aset kosong atau id
-     * tak dikenal → 404 netral; aset tidak dapat didekode / bukan PNG →
-     * fail-loud 500 (data korup, bukan kesalahan klien).
+     * Sumber baca: img service (`signature_asset_path`, lalu base64 legacy).
+     * Gate document.role sudah melindungi grup route. Tanpa aset sama
+     * sekali atau id tak dikenal → 404 netral; aset ada tapi tidak dapat
+     * dibaca / bukan PNG → fail-loud 500 (data rusak atau img service
+     * tidak terjangkau — bukan kesalahan klien).
      */
     public function signature(string $id): Response
     {
         $signer = Signer::query()
-            ->select(['id', 'signature_asset'])
+            ->select(['id', 'signature_asset_path', 'signature_asset'])
             ->find($id);
 
-        if ($signer === null || blank($signer->signature_asset)) {
+        if ($signer === null || ! $signer->hasSignatureAsset()) {
             abort(404);
         }
 
-        $binary = base64_decode((string) $signer->signature_asset, true);
+        $binary = $signer->signatureBinary();
 
-        if ($binary === false || ! str_starts_with($binary, "\x89PNG\r\n\x1a\n")) {
+        if ($binary === null) {
             logger()->error('Aset tanda tangan penandatangan tidak valid.', [
                 'signer_id' => $signer->id,
+                'signature_asset_path' => $signer->signature_asset_path,
             ]);
 
             throw new RuntimeException('Aset tanda tangan penandatangan tidak valid.');
